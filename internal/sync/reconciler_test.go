@@ -56,6 +56,41 @@ func TestReconcile_RecurringCompletionCreatesNextOccurrence(t *testing.T) {
 	}
 }
 
+func TestReconcile_RecurringOccurrenceWithSameTitleGetsNewHAUID(t *testing.T) {
+	now := time.Now().UTC()
+	oldOccurrence := newItem("rem-old", "Take bins out", "Shopping", model.PriorityNone, true, now)
+	newOccurrence := newItem("rem-new", "Take bins out", "Shopping", model.PriorityNone, false, now)
+
+	store := newMockStore()
+	store.seed(&state.Item{
+		RemindersUID: "rem-old",
+		HAUID:        "ha-old",
+		ListName:     "Shopping",
+		Title:        oldOccurrence.Title,
+		LastSyncHash: oldOccurrence.ProjectionHash(),
+	})
+	rem := newMockReminders(oldOccurrence, newOccurrence)
+	ha := newMockHA()
+	ha.addItems("todo.shopping", model.Item{
+		UID:       "ha-old",
+		Title:     oldOccurrence.Title,
+		Completed: true,
+	})
+
+	reconciler := NewReconciler(rem, ha, store, testLogger)
+	if _, err := reconciler.Run(context.Background(), testMappings); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	linked, err := store.GetItemByRemindersUID(context.Background(), "rem-new")
+	if err != nil {
+		t.Fatalf("get new occurrence linkage: %v", err)
+	}
+	if linked == nil || linked.HAUID == "" || linked.HAUID == "ha-old" {
+		t.Fatalf("new occurrence linkage = %#v, want a distinct HA UID", linked)
+	}
+}
+
 var (
 	testLogger   = slog.Default()
 	testMappings = map[string]string{"Shopping": "todo.shopping"}
