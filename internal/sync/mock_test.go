@@ -128,9 +128,10 @@ func (m *mockReminders) count() int {
 // --- Mock HA Source -----------------------------------------------------------
 
 type mockHA struct {
-	mu      sync.Mutex
-	items   map[string][]model.Item // entityID → items
-	nextUID int
+	mu        sync.Mutex
+	items     map[string][]model.Item // entityID → items
+	nextUID   int
+	summaries []model.ListSummary
 }
 
 func newMockHA() *mockHA {
@@ -193,6 +194,13 @@ func (m *mockHA) RemoveItem(_ context.Context, entityID, identifier string) erro
 		}
 	}
 	return fmt.Errorf("item %q not found in %s", identifier, entityID)
+}
+
+func (m *mockHA) PublishListSummary(_ context.Context, summary model.ListSummary) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.summaries = append(m.summaries, summary)
+	return nil
 }
 
 func (m *mockHA) getItems(entityID string) []model.Item {

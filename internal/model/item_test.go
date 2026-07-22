@@ -125,6 +125,19 @@ func TestContentHash_NilDueDate(t *testing.T) {
 	}
 }
 
+func TestProjectionHashIgnoresICloudOnlyMetadata(t *testing.T) {
+	item := &Item{Title: "Task", Assignment: &Assignment{Name: "Alex"}, Tags: []string{"outside"}}
+	before := item.ProjectionHash()
+	item.Assignment = &Assignment{Name: "Jordan"}
+	item.Tags = []string{"inside"}
+	if item.ProjectionHash() != before {
+		t.Fatal("ProjectionHash changed for iCloud-only metadata")
+	}
+	if item.ContentHash() == (&Item{Title: "Task", Assignment: &Assignment{Name: "Alex"}, Tags: []string{"outside"}}).ContentHash() {
+		t.Fatal("ContentHash should continue tracking native metadata")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Priority prefix encoding / decoding
 // ---------------------------------------------------------------------------

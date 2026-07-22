@@ -23,7 +23,7 @@ func TestReconcile_RecurringCompletionCreatesNextOccurrence(t *testing.T) {
 		HAUID:        "ha-1",
 		ListName:     "Shopping",
 		Title:        original.Title,
-		LastSyncHash: original.ContentHash(),
+		LastSyncHash: original.ProjectionHash(),
 	})
 	rem := newMockReminders(original)
 	ha := newMockHA()
@@ -158,7 +158,7 @@ func TestReconcile_Conflict_RemindersWins(t *testing.T) {
 
 	// State DB: item was synced with some hash at older time.
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
-	origHash := origItem.ContentHash()
+	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{
@@ -215,7 +215,7 @@ func TestReconcile_Conflict_ICloudWinsEvenWhenHAIsNewer(t *testing.T) {
 	haTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
-	origHash := origItem.ContentHash()
+	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{
@@ -362,7 +362,7 @@ func TestReconcile_DeletedFromHA_RemovedFromReminders(t *testing.T) {
 func TestReconcile_NoChanges_Idempotent(t *testing.T) {
 	now := time.Now().UTC()
 	remItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, now)
-	hash := remItem.ContentHash()
+	hash := remItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{
@@ -408,7 +408,7 @@ func TestReconcile_OnlyRemindersChanged_UpdatesHA(t *testing.T) {
 	newer := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
-	origHash := origItem.ContentHash()
+	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{
@@ -462,7 +462,7 @@ func TestReconcile_OnlyHAChanged_UpdatesReminders(t *testing.T) {
 	newer := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
-	origHash := origItem.ContentHash()
+	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{
@@ -476,6 +476,9 @@ func TestReconcile_OnlyHAChanged_UpdatesReminders(t *testing.T) {
 
 	// Reminders: unchanged.
 	remItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
+	remItem.Tags = []string{"groceries"}
+	remItem.Assignment = &model.Assignment{ID: "sharee-1", Name: "Alex"}
+	remItem.RecurrenceRules = []eventkit.RecurrenceRule{eventkit.Weekly(1, eventkit.Monday)}
 	rem := newMockReminders(remItem)
 
 	// HA: updated title.
@@ -505,6 +508,39 @@ func TestReconcile_OnlyHAChanged_UpdatesReminders(t *testing.T) {
 		}
 		t.Errorf("Reminders item title = %q, want %q", title, "Buy whole milk")
 	}
+	if got.Assignment == nil || got.Assignment.Name != "Alex" || len(got.Tags) != 1 || len(got.RecurrenceRules) != 1 {
+		t.Fatalf("HA edit erased native iCloud metadata: %#v", got)
+	}
+}
+
+func TestReconcilePublishesAssignmentSummary(t *testing.T) {
+	now := time.Now().UTC()
+	assigned := newItem("rem-1", "Assigned task", "Shopping", model.PriorityNone, false, now)
+	assigned.Assignment = &model.Assignment{ID: "sharee-1", Name: "Alex Smith"}
+	assigned.Tags = []string{"outside"}
+	unassigned := newItem("rem-2", "Open task", "Shopping", model.PriorityNone, false, now)
+	completed := newItem("rem-3", "Done task", "Shopping", model.PriorityNone, true, now)
+	rem := newMockReminders(assigned, unassigned, completed)
+	ha := newMockHA()
+	store := newMockStore()
+
+	r := NewReconciler(rem, ha, store, testLogger)
+	if _, err := r.Run(context.Background(), testMappings); err != nil {
+		t.Fatal(err)
+	}
+	if len(ha.summaries) != 1 {
+		t.Fatalf("summaries = %d, want 1", len(ha.summaries))
+	}
+	summary := ha.summaries[0]
+	if summary.Remaining != 2 || summary.ByAssignee["Alex Smith"] != 1 || summary.ByAssignee["Unassigned"] != 1 {
+		t.Fatalf("unexpected assignment summary: %#v", summary)
+	}
+	if summary.ByTag["outside"] != 1 || len(summary.Assignees) != 2 {
+		t.Fatalf("unexpected generic metadata summary: %#v", summary)
+	}
+	if len(summary.TasksByAssignee["Alex Smith"]) != 1 || summary.TasksByAssignee["Alex Smith"][0].UID != "rem-1" {
+		t.Fatalf("unexpected task details: %#v", summary.TasksByAssignee)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +569,7 @@ func TestReconcile_MultipleItems(t *testing.T) {
 		HAUID:        "ha-1",
 		ListName:     "Shopping",
 		Title:        "Existing",
-		LastSyncHash: existingItem.ContentHash(),
+		LastSyncHash: existingItem.ProjectionHash(),
 		LastSyncedAt: now,
 	})
 
@@ -566,7 +602,7 @@ func TestReconcile_CompletedStatusChange(t *testing.T) {
 	newer := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
-	origHash := origItem.ContentHash()
+	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
 	store.seed(&state.Item{

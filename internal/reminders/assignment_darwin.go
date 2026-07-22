@@ -4,7 +4,7 @@ package reminders
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Foundation -framework EventKit
+#cgo LDFLAGS: -framework Foundation -framework EventKit -framework AppKit
 #include <stdlib.h>
 #include "assignment_bridge_darwin.h"
 */
@@ -17,6 +17,10 @@ import (
 
 	"github.com/njoerd114/reminderrelay/internal/model"
 )
+
+func prepareNativeApplication() {
+	C.rr_prepare_application()
+}
 
 func assignmentResult(result C.rr_assignment_result_t) (*model.Assignment, error) {
 	if result.error != nil {

@@ -40,11 +40,12 @@ type haItemsResponse struct {
 // prefix (e.g. "[High] ") is stripped from the description and decoded into
 // the Priority field.
 func haItemToModelItem(h haTodoItem) model.Item {
-	priority, description, canonicalUID, tags, assignment, recurrence := model.DecodeHADescription(h.Description)
+	priority, description, canonicalUID, tags, assignment, recurrence, legacyMetadata := model.DecodeHADescription(h.Description)
 
 	item := model.Item{
 		UID:             h.UID,
 		CanonicalUID:    canonicalUID,
+		LegacyMetadata:  legacyMetadata,
 		Title:           h.Summary,
 		Description:     description,
 		Priority:        priority,

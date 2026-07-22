@@ -15,7 +15,7 @@ iCloud Reminders  ←──── commands ────  Home Assistant
 - **Bidirectional sync** — creates, edits, completions, and deletions made in either app propagate to the other.
 - **Push on both sides** — `EKEventStoreChangedNotification` receives iCloud/Reminders changes and HA's `todo/item/subscribe` stream receives every todo-item mutation, including edits that do not change entity state.
 - **Recurring reminders** — native EventKit recurrence rules round-trip; completing an occurrence lets Reminders materialize the next occurrence, which is pushed into HA with its next due date/time.
-- **Full metadata projection** — tags, recurrence rules, assignments, exact due date/time, notes, completion, and priority round-trip. Fields HA lacks natively live in a readable JSON metadata block at the end of the description.
+- **Clean metadata projection** — tags, recurrence rules, and assignments remain native in iCloud when HA edits supported fields. A generic `reminderrelay_list_summary` event exposes assignment/tag counts and task details to HA templates without polluting descriptions.
 - **Native assignments** — shared-list assignees are read and written through guarded ReminderKit runtime APIs on macOS. Assignees are resolved against participants already in the iCloud shared list.
 - **Recovery, not polling** — a six-hour full reconciliation is only a safety net for events missed while the daemon or network was unavailable.
 - **Priority mapping** — Apple Reminders priorities are encoded as `[High]`, `[Medium]`, `[Low]` prefixes in HA descriptions.
@@ -30,6 +30,12 @@ iCloud Reminders  ←──── commands ────  Home Assistant
 | Apple ID / iCloud | Signed in with Reminders enabled |
 | Home Assistant | A todo entity supporting CRUD, descriptions, due dates, and due datetimes |
 | HA long-lived access token | Profile → Security → Long-Lived Access Tokens |
+
+Build through `just build` so the executable receives its embedded Reminders
+privacy declaration. Setup installs a real per-user application bundle at
+`~/Applications/ReminderRelay.app`; no `sudo` is required. Release builds
+should use a stable Developer ID identity. Local maintainers can set
+`REMINDERRELAY_CODESIGN_IDENTITY` to a stable certificate name or hash.
 
 ## Quick Start
 
@@ -153,17 +159,31 @@ Home Assistant todo has no native priority field, so ReminderRelay encodes prior
 | Low | `[Low] ` |
 | None | *(no prefix)* |
 
-Tags, assignments, recurrence, and the stable iCloud reminder ID are encoded after the notes:
+Descriptions contain only the priority prefix and user-authored notes. Tags,
+assignments, recurrence rules, and the stable iCloud identifier remain native
+in iCloud and in ReminderRelay's linkage database. HA edits are merged onto the
+latest canonical reminder, so fields HA cannot represent are never cleared.
 
-```text
-Bring the blue bin
+After each reconciliation, ReminderRelay fires a generic
+`reminderrelay_list_summary` event through HA's built-in events API:
 
---- ReminderRelay metadata ---
-{"version":1,"icloud_uid":"…","tags":["outside"],"assignment":{"name":"Madi","address":"…"},"recurrence":[…]}
---- End ReminderRelay metadata ---
+```json
+{
+  "list_name": "Shared Tasks",
+  "todo_entity_id": "todo.shared_tasks",
+  "remaining": 4,
+  "by_assignee": {"Alex Smith": 3, "Unassigned": 1},
+  "by_tag": {"outside": 2},
+  "assignees": [],
+  "tasks_by_assignee": {},
+  "updated_at": "2026-07-22T01:00:00Z"
+}
 ```
 
-The block is deliberately editable. An HA edit is treated as a requested iCloud change. iCloud normalizes or rejects it, and the next HA state is always rebuilt from iCloud. Assignment names, addresses, or stable IDs must identify a participant in that reminder's shared iCloud list.
+Trigger-based HA template sensors can turn this event into any household- or
+workflow-specific entities. The public relay contains no assumptions about
+list names or assignees. Legacy visible metadata blocks from older releases
+are read for migration and removed during the next canonical refresh.
 
 ## Justfile Recipes
 
@@ -201,12 +221,12 @@ reminderrelay uninstall --purge  # also remove config, state DB, and logs
 
 ### Reminders access denied (TCC)
 
-macOS requires explicit permission for apps to access Reminders.  
-On first run a system dialog appears — click **OK**.  
+macOS requires explicit permission for apps to access Reminders.
+On first run a system dialog for **ReminderRelay** appears — click **Allow**.
 If you previously denied access:
 
 1. Open **System Settings → Privacy & Security → Reminders**.
-2. Enable access for Terminal (or your shell app).
+2. Enable access for **ReminderRelay**.
 
 ### HA connection refused
 
@@ -236,7 +256,7 @@ Both listeners reconnect automatically. `recovery_interval` controls the low-fre
 cmd/reminderrelay/        Entry point, subcommand dispatch, wiring
 internal/config/          YAML config loader + validation
 internal/state/           SQLite repository (WAL mode)
-internal/model/           Shared Item type, metadata codec, content hash
+internal/model/           Shared item/event types, legacy codec, content hashes
 internal/reminders/       EventKit adapter + guarded assignment bridge
 internal/homeassistant/   HA REST + native todo WebSocket subscription
 internal/sync/            Reconciler, bootstrap wizard, daemon engine

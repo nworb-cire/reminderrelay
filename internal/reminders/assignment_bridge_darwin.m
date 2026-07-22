@@ -1,5 +1,6 @@
 #import <EventKit/EventKit.h>
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <dlfcn.h>
@@ -10,6 +11,14 @@
 
 void rr_assignment_free(char *value) {
     if (value) free(value);
+}
+
+void rr_prepare_application(void) {
+    @autoreleasepool {
+        NSApplication *application = [NSApplication sharedApplication];
+        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        [application finishLaunching];
+    }
 }
 
 static rr_assignment_result_t rr_error(NSString *message) {

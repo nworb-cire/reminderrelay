@@ -33,6 +33,7 @@ type HASource interface {
 	AddItem(ctx context.Context, entityID string, item *model.Item) error
 	UpdateItem(ctx context.Context, entityID, identifier string, item *model.Item) error
 	RemoveItem(ctx context.Context, entityID, identifier string) error
+	PublishListSummary(ctx context.Context, summary model.ListSummary) error
 }
 
 // StateStore provides access to the sync state database.

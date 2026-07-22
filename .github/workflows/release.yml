@@ -41,9 +41,12 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           devbox run -- CGO_ENABLED=1 go build \
-            -ldflags "-s -w -X main.version=${VERSION}" \
+            -ldflags "-s -w -X main.version=${VERSION} -extldflags '-Wl,-sectcreate,__TEXT,__info_plist,${GITHUB_WORKSPACE}/internal/setup/app_info.plist'" \
             -o "reminderrelay-darwin-${{ matrix.goarch }}" \
             ./cmd/reminderrelay
+          codesign --force --sign - \
+            --identifier com.github.njoerd114.reminderrelay \
+            "reminderrelay-darwin-${{ matrix.goarch }}"
 
       - name: Compute SHA256 checksum
         run: shasum -a 256 "reminderrelay-darwin-${{ matrix.goarch }}" > "reminderrelay-darwin-${{ matrix.goarch }}.sha256"

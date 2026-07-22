@@ -9,7 +9,7 @@
     <!-- Binary & arguments -->
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/reminderrelay</string>
+        <string>__HOME__/Applications/ReminderRelay.app/Contents/MacOS/reminderrelay</string>
         <string>daemon</string>
     </array>
 

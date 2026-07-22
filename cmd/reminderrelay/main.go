@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -41,6 +42,12 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
+
+func init() {
+	// AppKit and EventKit permission requests must be initialized from the
+	// process main thread when ReminderRelay runs as a macOS application.
+	runtime.LockOSThread()
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -338,6 +345,9 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 	logger.Info("initialising Apple Reminders client (may trigger permissions prompt)…")
 	remAdapter, err := reminders.NewAdapter(logger)
 	if err != nil && strings.Contains(err.Error(), "access denied") {
+		if daemon {
+			return fmt.Errorf("reminders access is denied; grant access to ReminderRelay in System Settings → Privacy & Security → Reminders: %w", err)
+		}
 		// macOS has denied Reminders access (TCC). Open System Settings to the
 		// correct privacy page so the user can flip the switch, then retry once.
 		fmt.Fprintln(os.Stderr, "")

@@ -64,10 +64,14 @@ type Item struct {
 	// or HA todo item UID).
 	UID string
 
-	// CanonicalUID is the Apple Reminders identifier carried inside the HA
-	// description metadata. It is empty for a brand-new HA item until iCloud
-	// accepts it.
+	// CanonicalUID is the Apple Reminders identifier recovered from the legacy
+	// HA description metadata format. New projections keep this linkage only in
+	// ReminderRelay's state database.
 	CanonicalUID string
+
+	// LegacyMetadata reports that the HA description still contains the old
+	// visible ReminderRelay JSON block and needs a clean canonical refresh.
+	LegacyMetadata bool
 
 	// Title is the task's display title.
 	Title string
@@ -91,8 +95,8 @@ type Item struct {
 	Assignment *Assignment
 
 	// RecurrenceRules are the native EventKit recurrence rules. Home Assistant
-	// todo entities do not have a native recurrence field, so the HA adapter
-	// round-trips these through the description metadata block.
+	// todo entities do not have a native recurrence field, so iCloud retains
+	// them when HA-supported fields are edited.
 	RecurrenceRules []eventkit.RecurrenceRule
 
 	// Completed is true when the task has been marked as done.
@@ -148,12 +152,65 @@ func (i *Item) ContentHash() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ProjectionHash returns a deterministic digest of fields represented by a
+// Home Assistant todo item. Native iCloud-only metadata is intentionally
+// excluded: an HA edit is merged onto the latest iCloud item and must never
+// erase tags, assignments, or recurrence rules.
+func (i *Item) ProjectionHash() string {
+	h := sha256.New()
+	h.Write([]byte(i.Title))
+	h.Write([]byte("|"))
+	h.Write([]byte(i.Description))
+	h.Write([]byte("|"))
+	if i.DueDate != nil {
+		h.Write([]byte(i.DueDate.UTC().Format(time.RFC3339)))
+	}
+	h.Write([]byte("|"))
+	_, _ = fmt.Fprintf(h, "%d", i.Priority)
+	h.Write([]byte("|"))
+	_, _ = fmt.Fprintf(h, "%t", i.Completed)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Assignment is the stable identity and human-readable information for the
 // current assignee of a shared iCloud reminder.
 type Assignment struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Address string `json:"address,omitempty"`
+}
+
+// ListSummary is the generic machine-readable Home Assistant projection of
+// iCloud metadata that a todo entity cannot represent natively.
+type ListSummary struct {
+	ListName        string                   `json:"list_name"`
+	TodoEntityID    string                   `json:"todo_entity_id"`
+	Remaining       int                      `json:"remaining"`
+	ByAssignee      map[string]int           `json:"by_assignee"`
+	ByTag           map[string]int           `json:"by_tag"`
+	Assignees       []AssigneeSummary        `json:"assignees"`
+	TasksByAssignee map[string][]SummaryTask `json:"tasks_by_assignee"`
+	UpdatedAt       time.Time                `json:"updated_at"`
+}
+
+// AssigneeSummary retains both stable identity and display metadata. A nil
+// Assignment represents reminders that are currently unassigned.
+type AssigneeSummary struct {
+	Assignment *Assignment   `json:"assignment,omitempty"`
+	Name       string        `json:"name"`
+	Remaining  int           `json:"remaining"`
+	Tasks      []SummaryTask `json:"tasks"`
+}
+
+// SummaryTask is the compact task representation exposed as a summary
+// sensor attribute. The canonical UID lets HA automations correlate an item
+// without putting transport metadata in its visible description.
+type SummaryTask struct {
+	UID        string      `json:"uid"`
+	Title      string      `json:"title"`
+	DueAt      *time.Time  `json:"due_at,omitempty"`
+	Tags       []string    `json:"tags,omitempty"`
+	Assignment *Assignment `json:"assignment,omitempty"`
 }
 
 // --- Priority prefix encoding for Home Assistant descriptions ----------------

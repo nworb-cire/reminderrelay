@@ -14,12 +14,12 @@ import (
 //go:embed plist.tmpl
 var plistTemplateStr string
 
+//go:embed app_info.plist
+var appInfoPlist []byte
+
 const (
 	// BinaryName is the name of the installed binary.
 	BinaryName = "reminderrelay"
-
-	// InstallDir is the default install directory for the binary.
-	InstallDir = "/usr/local/bin"
 
 	// PlistLabel is the launchd job label.
 	PlistLabel = "com.github.njoerd114.reminderrelay"
@@ -31,9 +31,22 @@ type plistData struct {
 	HomeDir    string
 }
 
-// BinaryInstallPath returns the full path to the installed binary.
+// AppInstallPath returns the per-user application bundle path.
+func AppInstallPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, "Applications", "ReminderRelay.app")
+}
+
+// BinaryInstallPath returns the executable inside the application bundle.
 func BinaryInstallPath() string {
-	return filepath.Join(InstallDir, BinaryName)
+	appPath := AppInstallPath()
+	if appPath == "" {
+		return ""
+	}
+	return filepath.Join(appPath, "Contents", "MacOS", BinaryName)
 }
 
 // PlistPath returns the launchd plist destination path.
@@ -46,8 +59,9 @@ func LogDir(homeDir string) string {
 	return filepath.Join(homeDir, "Library", "Logs", BinaryName)
 }
 
-// InstallBinary copies the currently-running binary to /usr/local/bin.
-// Uses sudo if the target directory is not writable by the current user.
+// InstallBinary assembles and signs the per-user application bundle. A real
+// bundle identity is required for a background process to own a macOS TCC
+// Reminders grant; a bare CLI can only inherit its launching terminal's grant.
 func InstallBinary() error {
 	self, err := os.Executable()
 	if err != nil {
@@ -61,20 +75,35 @@ func InstallBinary() error {
 	}
 
 	dest := BinaryInstallPath()
-
-	// Check if the target directory is writable.
-	if isWritable(InstallDir) {
-		return copyFile(self, dest, 0o755)
+	if dest == "" || !filepath.IsAbs(dest) {
+		return fmt.Errorf("resolving application install path")
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("creating application bundle: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(AppInstallPath(), "Contents", "Info.plist"), appInfoPlist, 0o644); err != nil {
+		return fmt.Errorf("writing application Info.plist: %w", err)
+	}
+	if err := copyFile(self, dest, 0o755); err != nil {
+		return err
 	}
 
-	// Fallback: use sudo to install.
-	//nolint:gosec // sudo is intentional here — user is prompted by macOS.
-	cmd := exec.Command("sudo", "install", "-m", "755", self, dest)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sudo install to %s: %w", dest, err)
+	identity := os.Getenv("REMINDERRELAY_CODESIGN_IDENTITY")
+	if identity == "" {
+		identity = "-"
+	}
+	//nolint:gosec // arguments are passed directly, without a shell
+	sign := exec.Command("codesign", "--force", "--deep", "--options", "runtime", "--timestamp=none", "--sign", identity, AppInstallPath())
+	if output, err := sign.CombinedOutput(); err != nil {
+		return fmt.Errorf("signing application bundle: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	register := exec.Command(
+		"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+		"-f", AppInstallPath(),
+	)
+	if output, err := register.CombinedOutput(); err != nil {
+		return fmt.Errorf("registering application bundle: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	return nil
 }
@@ -153,24 +182,13 @@ func RemovePlist(homeDir string) error {
 	return nil
 }
 
-// RemoveBinary deletes the installed binary from /usr/local/bin.
-// Uses sudo if the directory is not writable.
+// RemoveBinary deletes the per-user application bundle.
 func RemoveBinary() error {
-	path := BinaryInstallPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil // already gone
+	appPath := AppInstallPath()
+	if appPath == "" || !filepath.IsAbs(appPath) {
+		return fmt.Errorf("resolving application install path")
 	}
-
-	if isWritable(InstallDir) {
-		return os.Remove(path)
-	}
-
-	//nolint:gosec // sudo is intentional
-	cmd := exec.Command("sudo", "rm", "-f", path)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return os.RemoveAll(appPath)
 }
 
 // IsDaemonLoaded checks whether the launchd job is currently loaded.
@@ -195,18 +213,6 @@ func PurgeUserData(homeDir string) error {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-// isWritable checks if the given directory is writable by the current user.
-func isWritable(dir string) bool {
-	f, err := os.CreateTemp(dir, ".rr-probe-*")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	_ = f.Close()
-	_ = os.Remove(name)
-	return true
-}
 
 // copyFile copies src to dst with the given permissions.
 func copyFile(src, dst string, perm os.FileMode) error {

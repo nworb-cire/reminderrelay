@@ -7,7 +7,7 @@
 set -euo pipefail
 
 BINARY_NAME="reminderrelay"
-INSTALL_DIR="/usr/local/bin"
+APP_DIR="${HOME}/Applications/ReminderRelay.app"
 PLIST_LABEL="com.github.njoerd114.reminderrelay"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
@@ -31,17 +31,12 @@ fi
 # --------------------------------------------------------------------------- #
 # 2. Remove binary
 # --------------------------------------------------------------------------- #
-BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
-if [[ -f "${BINARY_PATH}" ]]; then
-    echo "→ Removing binary…"
-    if [[ ! -w "${INSTALL_DIR}" ]]; then
-        sudo rm -f "${BINARY_PATH}"
-    else
-        rm -f "${BINARY_PATH}"
-    fi
-    echo "  Removed ${BINARY_PATH}"
+if [[ -d "${APP_DIR}" ]]; then
+    echo "→ Removing application…"
+    rm -rf "${APP_DIR}"
+    echo "  Removed ${APP_DIR}"
 else
-    echo "  Binary not found at ${BINARY_PATH}, skipping."
+    echo "  Application not found at ${APP_DIR}, skipping."
 fi
 
 # --------------------------------------------------------------------------- #

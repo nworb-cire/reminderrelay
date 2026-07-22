@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	ekreminders "github.com/BRO3886/go-eventkit/reminders"
 
@@ -41,6 +43,9 @@ type Adapter struct {
 // NewAdapter creates an Adapter backed by a real EventKit client.
 // This triggers the macOS TCC permissions prompt on first use.
 func NewAdapter(logger *slog.Logger) (*Adapter, error) {
+	if executable, executableErr := os.Executable(); executableErr == nil && strings.Contains(executable, ".app/Contents/MacOS/") {
+		prepareNativeApplication()
+	}
 	c, err := ekreminders.New()
 	if err != nil {
 		return nil, fmt.Errorf("initialising reminders client: %w", err)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/njoerd114/reminderrelay/internal/model"
@@ -82,6 +84,13 @@ func (r *Reconciler) Run(ctx context.Context, listMappings map[string]string) (S
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if err := r.publishListSummary(ctx, listName, entityID); err != nil {
+			stats.Errors++
+			r.log.Error("publishing list summary failed", "list", listName, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
 
 	r.log.Info("reconcile complete",
@@ -109,7 +118,14 @@ func (r *Reconciler) ReconcileEntity(ctx context.Context, listName, entityID str
 		remByUID[item.UID] = item
 	}
 
-	return r.reconcileList(ctx, listName, entityID, remByUID)
+	stats, reconcileErr := r.reconcileList(ctx, listName, entityID, remByUID)
+	if err := r.publishListSummary(ctx, listName, entityID); err != nil {
+		stats.Errors++
+		if reconcileErr == nil {
+			reconcileErr = err
+		}
+	}
+	return stats, reconcileErr
 }
 
 // reconcileList performs bidirectional sync for a single list ↔ entity pair.
@@ -177,8 +193,8 @@ func (r *Reconciler) reconcileList(ctx context.Context, listName, entityID strin
 			stats.Updated++
 			// Check if this was a conflict (both sides changed).
 			if remItem != nil && haItem != nil {
-				remHash := remItem.ContentHash()
-				haHash := haItem.ContentHash()
+				remHash := remItem.ProjectionHash()
+				haHash := haItem.ProjectionHash()
 				if remHash != oldHash && haHash != oldHash {
 					stats.Conflicts++
 				}
@@ -252,8 +268,11 @@ func (r *Reconciler) decide(si *state.Item, remItem, haItem *model.Item) action 
 	}
 
 	// Both exist — check for changes via content hash.
-	remHash := remItem.ContentHash()
-	haHash := haItem.ContentHash()
+	if haItem.LegacyMetadata {
+		return actionUpdateHA
+	}
+	remHash := remItem.ProjectionHash()
+	haHash := haItem.ProjectionHash()
 	remChanged := remHash != si.LastSyncHash
 	haChanged := haHash != si.LastSyncHash
 
@@ -329,13 +348,14 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 			return fmt.Errorf("updating %q in HA: %w", remItem.Title, err)
 		}
 		si.Title = remItem.Title
-		si.LastSyncHash = remItem.ContentHash()
+		si.LastSyncHash = remItem.ProjectionHash()
 		si.RemindersModified = remItem.ModifiedAt
 		si.LastSyncedAt = now
 		return r.store.UpsertItem(ctx, si)
 
 	case actionUpdateRem:
-		canonical, err := r.rem.Update(ctx, si.RemindersUID, haItem)
+		command := mergeHAProjection(remItem, haItem)
+		canonical, err := r.rem.Update(ctx, si.RemindersUID, command)
 		if err != nil {
 			return fmt.Errorf("updating %q in Reminders: %w", haItem.Title, err)
 		}
@@ -346,7 +366,7 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 			return fmt.Errorf("refreshing %q from canonical iCloud state: %w", canonical.Title, err)
 		}
 		si.Title = canonical.Title
-		si.LastSyncHash = canonical.ContentHash()
+		si.LastSyncHash = canonical.ProjectionHash()
 		si.RemindersModified = canonical.ModifiedAt
 		si.HAModified = haItem.ModifiedAt
 		si.LastSyncedAt = now
@@ -382,7 +402,7 @@ func (r *Reconciler) createInHA(ctx context.Context, remItem *model.Item, entity
 		HAUID:             haUID,
 		ListName:          remItem.ListName,
 		Title:             remItem.Title,
-		LastSyncHash:      remItem.ContentHash(),
+		LastSyncHash:      remItem.ProjectionHash(),
 		RemindersModified: remItem.ModifiedAt,
 		LastSyncedAt:      now,
 	}
@@ -405,10 +425,90 @@ func (r *Reconciler) createInReminders(ctx context.Context, haItem *model.Item, 
 		HAUID:             haItem.UID,
 		ListName:          haItem.ListName,
 		Title:             canonical.Title,
-		LastSyncHash:      canonical.ContentHash(),
+		LastSyncHash:      canonical.ProjectionHash(),
 		RemindersModified: canonical.ModifiedAt,
 		HAModified:        haItem.ModifiedAt,
 		LastSyncedAt:      now,
 	}
 	return r.store.UpsertItem(ctx, si)
+}
+
+// mergeHAProjection applies only fields Home Assistant represents onto the
+// latest canonical iCloud item. Tags, assignment, recurrence, and all other
+// native metadata remain untouched.
+func mergeHAProjection(canonical, projection *model.Item) *model.Item {
+	merged := *canonical
+	merged.Title = projection.Title
+	merged.Description = projection.Description
+	merged.DueDate = projection.DueDate
+	merged.Priority = projection.Priority
+	merged.Completed = projection.Completed
+	return &merged
+}
+
+func (r *Reconciler) publishListSummary(ctx context.Context, listName, entityID string) error {
+	items, err := r.rem.FetchAll(ctx, []string{listName})
+	if err != nil {
+		return fmt.Errorf("fetching metadata summary for %q: %w", listName, err)
+	}
+	summary := model.ListSummary{
+		ListName:        listName,
+		TodoEntityID:    entityID,
+		ByAssignee:      make(map[string]int),
+		ByTag:           make(map[string]int),
+		TasksByAssignee: make(map[string][]model.SummaryTask),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	groups := make(map[string]*model.AssigneeSummary)
+	for _, item := range items {
+		if item.ListName != listName || item.Completed {
+			continue
+		}
+		assigneeName := "Unassigned"
+		assigneeKey := "__unassigned__"
+		if item.Assignment != nil {
+			switch {
+			case item.Assignment.Name != "":
+				assigneeName = item.Assignment.Name
+			case item.Assignment.Address != "":
+				assigneeName = item.Assignment.Address
+			case item.Assignment.ID != "":
+				assigneeName = item.Assignment.ID
+			}
+			assigneeKey = item.Assignment.ID
+			if assigneeKey == "" {
+				assigneeKey = item.Assignment.Address
+			}
+			if assigneeKey == "" {
+				assigneeKey = item.Assignment.Name
+			}
+		}
+		task := model.SummaryTask{
+			UID:        item.UID,
+			Title:      item.Title,
+			DueAt:      item.DueDate,
+			Tags:       append([]string(nil), item.Tags...),
+			Assignment: item.Assignment,
+		}
+		summary.Remaining++
+		summary.ByAssignee[assigneeName]++
+		summary.TasksByAssignee[assigneeName] = append(summary.TasksByAssignee[assigneeName], task)
+		for _, tag := range item.Tags {
+			summary.ByTag[tag]++
+		}
+		group := groups[assigneeKey]
+		if group == nil {
+			group = &model.AssigneeSummary{Assignment: item.Assignment, Name: assigneeName}
+			groups[assigneeKey] = group
+		}
+		group.Remaining++
+		group.Tasks = append(group.Tasks, task)
+	}
+	for _, group := range groups {
+		summary.Assignees = append(summary.Assignees, *group)
+	}
+	sort.Slice(summary.Assignees, func(i, j int) bool {
+		return strings.ToLower(summary.Assignees[i].Name) < strings.ToLower(summary.Assignees[j].Name)
+	})
+	return r.ha.PublishListSummary(ctx, summary)
 }

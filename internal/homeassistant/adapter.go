@@ -29,6 +29,7 @@ type RESTClient interface {
 	// CallServiceWithResponse POSTs with ?return_response=true. Used for
 	// todo.get_items which returns data.
 	CallServiceWithResponse(ctx context.Context, domain, service string, body io.Reader) (haclient.ServiceCallResponse, error)
+	FireEvent(ctx context.Context, eventType string, body io.Reader) error
 }
 
 // haClientWrapper wraps [haclient.Client] and adds a plain CallService method
@@ -84,6 +85,28 @@ func (w *haClientWrapper) CallService(ctx context.Context, domain, service strin
 
 func (w *haClientWrapper) CallServiceWithResponse(ctx context.Context, domain, service string, body io.Reader) (haclient.ServiceCallResponse, error) {
 	return w.client.CallServiceWithResponse(ctx, domain, service, body)
+}
+
+func (w *haClientWrapper) FireEvent(ctx context.Context, eventType string, body io.Reader) error {
+	endpoint := strings.TrimRight(w.baseURL, "/") + "/api/events/" + url.PathEscape(eventType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("create event request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+w.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := w.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("fire event request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("HA returned 401 Unauthorized — check ha_token")
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HA returned unexpected status %d while firing event", resp.StatusCode)
+	}
+	return nil
 }
 
 // Adapter provides sync-engine–oriented operations on Home Assistant todo
@@ -249,6 +272,19 @@ func (a *Adapter) RemoveItem(ctx context.Context, entityID, identifier string) e
 	return nil
 }
 
+// PublishListSummary emits a generic built-in Home Assistant event consumed
+// by trigger-based template sensors. This exposes native iCloud metadata to
+// HA without placing transport JSON in user-facing todo descriptions.
+func (a *Adapter) PublishListSummary(ctx context.Context, summary model.ListSummary) error {
+	err := Retry(ctx, defaultMaxAttempts, func() error {
+		return a.rest.FireEvent(ctx, "reminderrelay_list_summary", serviceBody(summary))
+	})
+	if err != nil {
+		return fmt.Errorf("publish list summary for %q: %w", summary.ListName, err)
+	}
+	return nil
+}
+
 // SubscribeChanges uses Home Assistant's dedicated todo/item/subscribe
 // WebSocket command. Unlike state_changed, this fires for item edits that do
 // not change the entity's incomplete-count state (for example title, due time,
@@ -386,9 +422,9 @@ func (a *Adapter) subscribeTodoItemsOnce(ctx context.Context, entityIDs []string
 	}
 }
 
-// serviceBody marshals data to a JSON [io.Reader] for service calls.
-func serviceBody(data map[string]interface{}) io.Reader {
-	b, _ := json.Marshal(data) //nolint:errcheck // map[string]interface{} always marshals
+// serviceBody marshals data to a JSON [io.Reader] for service and event calls.
+func serviceBody(data interface{}) io.Reader {
+	b, _ := json.Marshal(data) //nolint:errcheck // adapter payloads contain only JSON-safe values
 	return bytes.NewReader(b)
 }
 

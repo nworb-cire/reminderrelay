@@ -12,6 +12,8 @@ func readAssignment(string) (*model.Assignment, error) {
 	return nil, nil
 }
 
+func prepareNativeApplication() {}
+
 func writeAssignment(string, *model.Assignment) (*model.Assignment, error) {
 	return nil, fmt.Errorf("reminder assignments require macOS with cgo")
 }
