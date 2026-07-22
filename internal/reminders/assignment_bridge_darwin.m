@@ -18,6 +18,12 @@ void rr_prepare_application(void) {
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [application finishLaunching];
+        // Privacy prompts are only presented from an active GUI application.
+        // A launchd process without an existing grant is denied by default.
+        if ([EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder] ==
+            EKAuthorizationStatusNotDetermined) {
+            [application activateIgnoringOtherApps:YES];
+        }
     }
 }
 
