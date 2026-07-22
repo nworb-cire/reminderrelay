@@ -18,8 +18,13 @@ import (
 	"github.com/njoerd114/reminderrelay/internal/model"
 )
 
-func prepareNativeApplication() {
-	C.rr_prepare_application()
+func prepareNativeApplication() error {
+	message := C.rr_prepare_application()
+	if message == nil {
+		return nil
+	}
+	defer C.rr_assignment_free(message)
+	return fmt.Errorf("native application preparation: %s", C.GoString(message))
 }
 
 func assignmentResult(result C.rr_assignment_result_t) (*model.Assignment, error) {

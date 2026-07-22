@@ -13,17 +13,47 @@ void rr_assignment_free(char *value) {
     if (value) free(value);
 }
 
-void rr_prepare_application(void) {
+char *rr_prepare_application(void) {
     @autoreleasepool {
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [application finishLaunching];
-        // Privacy prompts are only presented from an active GUI application.
-        // A launchd process without an existing grant is denied by default.
-        if ([EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder] ==
-            EKAuthorizationStatusNotDetermined) {
-            [application activateIgnoringOtherApps:YES];
+
+        EKAuthorizationStatus status =
+            [EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder];
+        if (status == EKAuthorizationStatusFullAccess) return NULL;
+        if (status == EKAuthorizationStatusDenied || status == EKAuthorizationStatusRestricted) {
+            return strdup("Reminders access is denied");
         }
+
+        // EventKit's consent request is asynchronous. Keep the main AppKit run
+        // loop alive while macOS presents the sheet; blocking this thread on a
+        // semaphore causes a background-style denial before any TCC record is
+        // created.
+        [application activateIgnoringOtherApps:YES];
+        EKEventStore *store = [[EKEventStore alloc] init];
+        __block BOOL finished = NO;
+        __block BOOL granted = NO;
+        __block NSError *accessError = nil;
+        [store requestFullAccessToRemindersWithCompletion:^(BOOL didGrant, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                granted = didGrant;
+                accessError = error;
+                finished = YES;
+            });
+        }];
+        while (!finished) {
+            @autoreleasepool {
+                [[NSRunLoop currentRunLoop]
+                    runMode:NSDefaultRunLoopMode
+                    beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+            }
+        }
+        if (granted) return NULL;
+        NSString *message = accessError
+            ? [NSString stringWithFormat:@"Reminders access denied: %@", accessError.localizedDescription]
+            : @"Reminders access denied";
+        return strdup(message.UTF8String);
     }
 }
 

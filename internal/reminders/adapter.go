@@ -44,7 +44,9 @@ type Adapter struct {
 // This triggers the macOS TCC permissions prompt on first use.
 func NewAdapter(logger *slog.Logger) (*Adapter, error) {
 	if executable, executableErr := os.Executable(); executableErr == nil && strings.Contains(executable, ".app/Contents/MacOS/") {
-		prepareNativeApplication()
+		if err := prepareNativeApplication(); err != nil {
+			return nil, err
+		}
 	}
 	c, err := ekreminders.New()
 	if err != nil {
