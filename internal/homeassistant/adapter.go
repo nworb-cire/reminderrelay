@@ -16,7 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	haclient "github.com/mkelcik/go-ha-client/v2"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 // RESTClient is the subset of [haclient.Client] methods used by the adapter.

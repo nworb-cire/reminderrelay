@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/config"
+	"github.com/nworb-cire/reminderrelay/internal/config"
 )
 
 // Wizard guides the user through first-run configuration and installation.

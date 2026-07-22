@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 func prepareNativeApplication() error {

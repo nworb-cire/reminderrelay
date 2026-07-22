@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
-	"github.com/njoerd114/reminderrelay/internal/state"
+	"github.com/nworb-cire/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/state"
 )
 
 // action describes a single mutation the reconciler wants to perform.

@@ -25,7 +25,7 @@ const (
 	BinaryName = "reminderrelay"
 
 	// PlistLabel is the launchd job label.
-	PlistLabel = "com.github.njoerd114.reminderrelay"
+	PlistLabel = "com.github.nworb-cire.reminderrelay"
 )
 
 // plistData holds template values for the launchd plist.

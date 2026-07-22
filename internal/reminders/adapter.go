@@ -16,7 +16,7 @@ import (
 
 	ekreminders "github.com/BRO3886/go-eventkit/reminders"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 // EventKitClient is the subset of [ekreminders.Client] methods used by the

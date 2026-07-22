@@ -1,4 +1,4 @@
-module github.com/njoerd114/reminderrelay
+module github.com/nworb-cire/reminderrelay
 
 go 1.24.13
 

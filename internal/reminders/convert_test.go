@@ -7,7 +7,7 @@ import (
 	"github.com/BRO3886/go-eventkit"
 	ekreminders "github.com/BRO3886/go-eventkit/reminders"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 // ---------------------------------------------------------------------------

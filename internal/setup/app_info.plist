@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>reminderrelay</string>
     <key>CFBundleIdentifier</key>
-    <string>com.github.njoerd114.reminderrelay</string>
+    <string>com.github.nworb-cire.reminderrelay</string>
     <key>CFBundleName</key>
     <string>ReminderRelay</string>
     <key>CFBundlePackageType</key>

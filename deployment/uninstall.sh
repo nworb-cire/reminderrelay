@@ -8,7 +8,7 @@ set -euo pipefail
 
 BINARY_NAME="reminderrelay"
 APP_DIR="${HOME}/Applications/ReminderRelay.app"
-PLIST_LABEL="com.github.njoerd114.reminderrelay"
+PLIST_LABEL="com.github.nworb-cire.reminderrelay"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
 PURGE=false

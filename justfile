@@ -7,13 +7,13 @@ binary := "reminderrelay"
 home_dir := env('HOME')
 app_dir := home_dir / "Applications/ReminderRelay.app"
 install_bin := app_dir / "Contents/MacOS" / binary
-plist_name := "com.github.njoerd114.reminderrelay"
+plist_name := "com.github.nworb-cire.reminderrelay"
 plist_src := "deployment/" + plist_name + ".plist"
 plist_dest := env('HOME') / "Library/LaunchAgents/" + plist_name + ".plist"
 state_db := env('HOME') / ".local/share/reminderrelay/state.db"
 info_plist := justfile_directory() / "internal/setup/app_info.plist"
 entitlements := justfile_directory() / "internal/setup/entitlements.plist"
-bundle_id := "com.github.njoerd114.reminderrelay"
+bundle_id := "com.github.nworb-cire.reminderrelay"
 sign_id := env_var_or_default('REMINDERRELAY_CODESIGN_IDENTITY', '-')
 
 # List available recipes

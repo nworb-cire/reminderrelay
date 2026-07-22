@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 // ---------------------------------------------------------------------------

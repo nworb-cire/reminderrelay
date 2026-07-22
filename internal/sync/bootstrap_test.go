@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
-	"github.com/njoerd114/reminderrelay/internal/state"
+	"github.com/nworb-cire/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/state"
 )
 
 func TestBootstrap_SkipsNonEmptyDB(t *testing.T) {

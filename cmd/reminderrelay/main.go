@@ -31,13 +31,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/config"
-	"github.com/njoerd114/reminderrelay/internal/homeassistant"
-	"github.com/njoerd114/reminderrelay/internal/reminders"
-	"github.com/njoerd114/reminderrelay/internal/setup"
-	"github.com/njoerd114/reminderrelay/internal/state"
-	syncp "github.com/njoerd114/reminderrelay/internal/sync"
-	"github.com/njoerd114/reminderrelay/internal/telemetry"
+	"github.com/nworb-cire/reminderrelay/internal/config"
+	"github.com/nworb-cire/reminderrelay/internal/homeassistant"
+	"github.com/nworb-cire/reminderrelay/internal/reminders"
+	"github.com/nworb-cire/reminderrelay/internal/setup"
+	"github.com/nworb-cire/reminderrelay/internal/state"
+	syncp "github.com/nworb-cire/reminderrelay/internal/sync"
+	"github.com/nworb-cire/reminderrelay/internal/telemetry"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."

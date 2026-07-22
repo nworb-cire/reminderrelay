@@ -4,7 +4,7 @@
 <dict>
     <!-- Identity -->
     <key>Label</key>
-    <string>com.github.njoerd114.reminderrelay</string>
+    <string>com.github.nworb-cire.reminderrelay</string>
 
     <!-- Binary & arguments -->
     <key>ProgramArguments</key>

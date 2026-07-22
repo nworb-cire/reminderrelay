@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 // addToHAAndResolveUID creates an HA todo item and identifies the UID assigned

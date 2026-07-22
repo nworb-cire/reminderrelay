@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
-	"github.com/njoerd114/reminderrelay/internal/state"
+	"github.com/nworb-cire/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/state"
 )
 
 // ErrBootstrapCancelled prevents the daemon from reconciling against an empty

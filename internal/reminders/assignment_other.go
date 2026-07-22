@@ -5,7 +5,7 @@ package reminders
 import (
 	"fmt"
 
-	"github.com/njoerd114/reminderrelay/internal/model"
+	"github.com/nworb-cire/reminderrelay/internal/model"
 )
 
 func readAssignment(string) (*model.Assignment, error) {
