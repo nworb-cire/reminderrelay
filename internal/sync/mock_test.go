@@ -162,6 +162,9 @@ func (m *mockHA) AddItem(_ context.Context, entityID string, item *model.Item) e
 	m.nextUID++
 	cp := *item
 	cp.UID = fmt.Sprintf("ha-%d", m.nextUID)
+	// HA's todo.add_item service always creates an incomplete item. The relay
+	// must follow the add with update_item to apply canonical completion.
+	cp.Completed = false
 	m.items[entityID] = append(m.items[entityID], cp)
 	return nil
 }

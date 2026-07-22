@@ -8,7 +8,7 @@ import (
 	"github.com/BRO3886/go-eventkit"
 )
 
-func TestHADescriptionOmitsNativeMetadata(t *testing.T) {
+func TestHADescriptionUsesCompactYAMLProjection(t *testing.T) {
 	item := &Item{
 		CanonicalUID: "icloud-123",
 		Description:  "Bring the blue bin",
@@ -21,7 +21,8 @@ func TestHADescriptionOmitsNativeMetadata(t *testing.T) {
 	}
 
 	description := EncodeHADescription(item)
-	if description != "[High] Bring the blue bin" {
+	want := "Assignee: Alex\nTags:\n  - outside\n  - weekly\nPriority: High\nNotes: Bring the blue bin"
+	if description != want {
 		t.Fatalf("encoded description = %q", description)
 	}
 	priority, notes, canonicalUID, tags, assignment, recurrence, legacy := DecodeHADescription(description)
@@ -31,8 +32,8 @@ func TestHADescriptionOmitsNativeMetadata(t *testing.T) {
 	if priority != PriorityHigh || notes != item.Description {
 		t.Fatalf("decoded priority/notes = %v/%q", priority, notes)
 	}
-	if canonicalUID != "" || len(tags) != 0 || assignment != nil || len(recurrence) != 0 {
-		t.Fatal("new HA descriptions must not expose native iCloud metadata")
+	if canonicalUID != "" || len(tags) != 2 || assignment == nil || assignment.Name != "Alex" || len(recurrence) != 0 {
+		t.Fatalf("decoded YAML metadata = uid:%q tags:%#v assignment:%#v recurrence:%#v", canonicalUID, tags, assignment, recurrence)
 	}
 }
 

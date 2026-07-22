@@ -36,10 +36,16 @@ func addToHAAndResolveUID(ctx context.Context, ha HASource, entityID string, ite
 		}
 	}
 	if len(candidates) == 1 {
+		if err := ha.UpdateItem(ctx, entityID, candidates[0].UID, item); err != nil {
+			return "", fmt.Errorf("applying canonical fields to new HA item %q: %w", item.Title, err)
+		}
 		return candidates[0].UID, nil
 	}
 	for _, candidate := range candidates {
 		if candidate.CanonicalUID == item.UID {
+			if err := ha.UpdateItem(ctx, entityID, candidate.UID, item); err != nil {
+				return "", fmt.Errorf("applying canonical fields to new HA item %q: %w", item.Title, err)
+			}
 			return candidate.UID, nil
 		}
 	}

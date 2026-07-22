@@ -144,6 +144,24 @@ func TestReconcile_NewReminderItem_CreatedInHA(t *testing.T) {
 	}
 }
 
+func TestReconcile_NewCompletedReminderPreservesCompletionInHA(t *testing.T) {
+	now := time.Now().UTC()
+	remItem := newItem("rem-done", "Already done", "Shopping", model.PriorityNone, true, now)
+
+	rem := newMockReminders(remItem)
+	ha := newMockHA()
+	store := newMockStore()
+	r := NewReconciler(rem, ha, store, testLogger)
+	if _, err := r.Run(context.Background(), testMappings); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	items := ha.getItems("todo.shopping")
+	if len(items) != 1 || !items[0].Completed {
+		t.Fatalf("HA items = %#v, want one completed item", items)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Scenario 2: Item exists only in HA → created in Reminders
 // ---------------------------------------------------------------------------
@@ -497,6 +515,9 @@ func TestReconcile_OnlyHAChanged_UpdatesReminders(t *testing.T) {
 	newer := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	origItem := newItem("rem-1", "Buy milk", "Shopping", model.PriorityNone, false, older)
+	origItem.Tags = []string{"groceries"}
+	origItem.Assignment = &model.Assignment{ID: "sharee-1", Name: "Alex"}
+	origItem.RecurrenceRules = []eventkit.RecurrenceRule{eventkit.Weekly(1, eventkit.Monday)}
 	origHash := origItem.ProjectionHash()
 
 	store := newMockStore()
@@ -522,6 +543,8 @@ func TestReconcile_OnlyHAChanged_UpdatesReminders(t *testing.T) {
 		UID:        "ha-1",
 		Title:      "Buy whole milk",
 		Priority:   model.PriorityNone,
+		Tags:       []string{"groceries"},
+		Assignment: &model.Assignment{Name: "Alex"},
 		ModifiedAt: newer,
 	})
 

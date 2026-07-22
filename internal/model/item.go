@@ -153,9 +153,8 @@ func (i *Item) ContentHash() string {
 }
 
 // ProjectionHash returns a deterministic digest of fields represented by a
-// Home Assistant todo item. Native iCloud-only metadata is intentionally
-// excluded: an HA edit is merged onto the latest iCloud item and must never
-// erase tags, assignments, or recurrence rules.
+// Home Assistant todo item, including the human-facing YAML metadata. Native
+// recurrence implementation details remain excluded.
 func (i *Item) ProjectionHash() string {
 	h := sha256.New()
 	h.Write([]byte(i.Title))
@@ -168,8 +167,33 @@ func (i *Item) ProjectionHash() string {
 	h.Write([]byte("|"))
 	_, _ = fmt.Fprintf(h, "%d", i.Priority)
 	h.Write([]byte("|"))
+	tags := append([]string(nil), i.Tags...)
+	sort.Slice(tags, func(a, b int) bool {
+		return strings.ToLower(tags[a]) < strings.ToLower(tags[b])
+	})
+	for _, tag := range tags {
+		h.Write([]byte(strings.ToLower(tag)))
+		h.Write([]byte{0})
+	}
+	h.Write([]byte("|"))
+	h.Write([]byte(strings.ToLower(i.AssigneeLabel())))
+	h.Write([]byte("|"))
 	_, _ = fmt.Fprintf(h, "%t", i.Completed)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// AssigneeLabel returns the most useful human-facing assignment identity.
+func (i *Item) AssigneeLabel() string {
+	if i.Assignment == nil {
+		return ""
+	}
+	if i.Assignment.Name != "" {
+		return i.Assignment.Name
+	}
+	if i.Assignment.Address != "" {
+		return i.Assignment.Address
+	}
+	return i.Assignment.ID
 }
 
 // Assignment is the stable identity and human-readable information for the

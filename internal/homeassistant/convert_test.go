@@ -165,8 +165,8 @@ func TestBuildAddItemData_FullFields(t *testing.T) {
 	if data["item"] != "New task" {
 		t.Errorf("item = %v, want New task", data["item"])
 	}
-	if data["description"] != "[High] Some notes" {
-		t.Errorf("description = %v, want [High] Some notes", data["description"])
+	if data["description"] != "Priority: High\nNotes: Some notes" {
+		t.Errorf("description = %v, want YAML priority and notes", data["description"])
 	}
 	if data["due_date"] != "2026-05-01" {
 		t.Errorf("due_date = %v, want 2026-05-01", data["due_date"])
@@ -208,9 +208,8 @@ func TestBuildAddItemData_PriorityOnlyNoDescription(t *testing.T) {
 
 	data := buildAddItemData("todo.work", item)
 
-	// "[Medium] " + "" = "[Medium] "
-	if data["description"] != "[Medium] " {
-		t.Errorf("description = %q, want %q", data["description"], "[Medium] ")
+	if data["description"] != "Priority: Medium" {
+		t.Errorf("description = %q, want %q", data["description"], "Priority: Medium")
 	}
 }
 
@@ -239,8 +238,8 @@ func TestBuildUpdateItemData_TitleChanged(t *testing.T) {
 	if data["rename"] != "Updated title" {
 		t.Errorf("rename = %v, want Updated title", data["rename"])
 	}
-	if data["description"] != "[Low] Updated notes" {
-		t.Errorf("description = %v, want [Low] Updated notes", data["description"])
+	if data["description"] != "Priority: Low\nNotes: Updated notes" {
+		t.Errorf("description = %v, want YAML priority and notes", data["description"])
 	}
 	if data["status"] != statusNeedsAction {
 		t.Errorf("status = %v, want %s", data["status"], statusNeedsAction)

@@ -15,10 +15,10 @@ iCloud Reminders  ←──── commands ────  Home Assistant
 - **Bidirectional sync** — creates, edits, completions, and deletions made in either app propagate to the other.
 - **Push on both sides** — `EKEventStoreChangedNotification` receives iCloud/Reminders changes and HA's `todo/item/subscribe` stream receives every todo-item mutation, including edits that do not change entity state.
 - **Recurring reminders** — native EventKit recurrence rules round-trip; completing an occurrence lets Reminders materialize the next occurrence, which is pushed into HA with its next due date/time.
-- **Clean metadata projection** — tags, recurrence rules, and assignments remain native in iCloud when HA edits supported fields. A generic `reminderrelay_list_summary` event exposes assignment/tag counts and task details to HA templates without polluting descriptions.
+- **Readable metadata projection** — assignee, tags, priority, and notes appear as compact YAML in HA descriptions. Native recurrence stays in iCloud, and a generic `reminderrelay_list_summary` event exposes assignment/tag counts and task details to HA templates.
 - **Native assignments** — shared-list assignees are read and written through guarded ReminderKit runtime APIs on macOS. Assignees are resolved against participants already in the iCloud shared list.
 - **Recovery, not polling** — a six-hour full reconciliation is only a safety net for events missed while the daemon or network was unavailable.
-- **Priority mapping** — Apple Reminders priorities are encoded as `[High]`, `[Medium]`, `[Low]` prefixes in HA descriptions.
+- **Priority mapping** — Apple Reminders priority is included in the human-readable YAML description because HA todo has no native priority field.
 - **First-run bootstrap** — interactive wizard that matches existing items between both sides by title and prompts before writing anything.
 - **Persistent state database** — SQLite tracks sync metadata so resuming after a restart is safe.
 
@@ -149,20 +149,22 @@ just sync-once -- --verbose 2>&1 | grep "entity"
 
 ## Home Assistant projection format
 
-Apple Reminders supports four priority levels.  
-Home Assistant todo has no native priority field, so ReminderRelay encodes priority as a prefix in the task description:
+Home Assistant todo has no native assignee, tag, or priority fields, so
+ReminderRelay renders those useful fields with the reminder notes as compact,
+valid YAML:
 
-| Reminders priority | Description prefix |
-|---|---|
-| High | `[High] ` |
-| Medium | `[Medium] ` |
-| Low | `[Low] ` |
-| None | *(no prefix)* |
+```yaml
+Assignee: Alex Smith
+Tags:
+  - Kitchen
+  - Daily
+Priority: High
+Notes: Empty and reload the dishwasher
+```
 
-Descriptions contain only the priority prefix and user-authored notes. Tags,
-assignments, recurrence rules, and the stable iCloud identifier remain native
-in iCloud and in ReminderRelay's linkage database. HA edits are merged onto the
-latest canonical reminder, so fields HA cannot represent are never cleared.
+Empty fields are omitted. Internal identifiers and native recurrence details
+remain in iCloud and ReminderRelay's linkage database. HA edits are merged onto
+the latest canonical reminder, so fields HA cannot represent are never cleared.
 
 After each reconciliation, ReminderRelay fires a generic
 `reminderrelay_list_summary` event through HA's built-in events API:
@@ -182,8 +184,9 @@ After each reconciliation, ReminderRelay fires a generic
 
 Trigger-based HA template sensors can turn this event into any household- or
 workflow-specific entities. The public relay contains no assumptions about
-list names or assignees. Legacy visible metadata blocks from older releases
-are read for migration and removed during the next canonical refresh.
+list names or assignees. Legacy JSON metadata blocks and priority prefixes from
+older releases are read for migration and replaced with YAML during the next
+canonical refresh.
 
 ## Justfile Recipes
 

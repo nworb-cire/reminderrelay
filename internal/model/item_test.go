@@ -3,6 +3,8 @@ package model
 import (
 	"testing"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // ---------------------------------------------------------------------------
@@ -125,16 +127,18 @@ func TestContentHash_NilDueDate(t *testing.T) {
 	}
 }
 
-func TestProjectionHashIgnoresICloudOnlyMetadata(t *testing.T) {
+func TestProjectionHashTracksVisibleYAMLMetadataButNotRecurrence(t *testing.T) {
 	item := &Item{Title: "Task", Assignment: &Assignment{Name: "Alex"}, Tags: []string{"outside"}}
 	before := item.ProjectionHash()
 	item.Assignment = &Assignment{Name: "Jordan"}
 	item.Tags = []string{"inside"}
-	if item.ProjectionHash() != before {
-		t.Fatal("ProjectionHash changed for iCloud-only metadata")
+	if item.ProjectionHash() == before {
+		t.Fatal("ProjectionHash did not change for visible YAML metadata")
 	}
-	if item.ContentHash() == (&Item{Title: "Task", Assignment: &Assignment{Name: "Alex"}, Tags: []string{"outside"}}).ContentHash() {
-		t.Fatal("ContentHash should continue tracking native metadata")
+	beforeRecurrence := item.ProjectionHash()
+	item.RecurrenceRules = []eventkit.RecurrenceRule{eventkit.Daily(1)}
+	if item.ProjectionHash() != beforeRecurrence {
+		t.Fatal("ProjectionHash changed for hidden recurrence metadata")
 	}
 }
 
