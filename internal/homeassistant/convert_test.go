@@ -189,6 +189,17 @@ func TestBuildAddItemData_NoPriorityNoDescription(t *testing.T) {
 	}
 }
 
+func TestBuildAddItemData_PreservesDueTime(t *testing.T) {
+	due := time.Date(2026, 5, 1, 18, 45, 0, 0, time.FixedZone("MDT", -6*60*60))
+	data := buildAddItemData("todo.chores", &model.Item{Title: "Water plants", DueDate: &due})
+	if data["due_datetime"] != "2026-05-01T18:45:00-06:00" {
+		t.Fatalf("due_datetime = %v", data["due_datetime"])
+	}
+	if _, present := data["due_date"]; present {
+		t.Fatal("due_date and due_datetime must not both be sent")
+	}
+}
+
 func TestBuildAddItemData_PriorityOnlyNoDescription(t *testing.T) {
 	item := &model.Item{
 		Title:    "Priority only",
@@ -239,16 +250,16 @@ func TestBuildUpdateItemData_TitleChanged(t *testing.T) {
 	}
 }
 
-func TestBuildUpdateItemData_TitleUnchanged(t *testing.T) {
+func TestBuildUpdateItemData_AlwaysSendsCanonicalTitle(t *testing.T) {
 	item := &model.Item{
 		Title:     "Same title",
 		Completed: true,
 	}
 
-	data := buildUpdateItemData("todo.work", "Same title", item)
+	data := buildUpdateItemData("todo.work", "ha-uid", item)
 
-	if _, ok := data["rename"]; ok {
-		t.Error("rename should be absent when title unchanged")
+	if data["rename"] != "Same title" {
+		t.Errorf("rename = %v, want canonical title", data["rename"])
 	}
 	if data["status"] != statusCompleted {
 		t.Errorf("status = %v, want %s", data["status"], statusCompleted)
@@ -305,8 +316,8 @@ func TestParseDue_Invalid(t *testing.T) {
 func TestFormatDue(t *testing.T) {
 	d := time.Date(2026, 12, 25, 10, 30, 0, 0, time.UTC)
 	got := formatDue(&d)
-	if got != "2026-12-25" {
-		t.Errorf("formatDue = %q, want %q", got, "2026-12-25")
+	if got != "2026-12-25T10:30:00Z" {
+		t.Errorf("formatDue = %q, want %q", got, "2026-12-25T10:30:00Z")
 	}
 }
 

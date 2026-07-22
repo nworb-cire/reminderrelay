@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BRO3886/go-eventkit"
 	ekreminders "github.com/BRO3886/go-eventkit/reminders"
 
 	"github.com/njoerd114/reminderrelay/internal/model"
@@ -18,14 +19,16 @@ func TestReminderToItem_FullFields(t *testing.T) {
 	mod := time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
 
 	r := &ekreminders.Reminder{
-		ID:         "EK-UID-123",
-		Title:      "Buy milk",
-		Notes:      "Whole milk preferred",
-		List:       "Shopping",
-		DueDate:    &due,
-		ModifiedAt: &mod,
-		Priority:   ekreminders.PriorityHigh,
-		Completed:  false,
+		ID:              "EK-UID-123",
+		Title:           "Buy milk",
+		Notes:           "Whole milk preferred",
+		List:            "Shopping",
+		DueDate:         &due,
+		ModifiedAt:      &mod,
+		Priority:        ekreminders.PriorityHigh,
+		Completed:       false,
+		Tags:            []string{"errand", "dairy"},
+		RecurrenceRules: []eventkit.RecurrenceRule{eventkit.Weekly(1, eventkit.Monday)},
 	}
 
 	got := reminderToItem(r, "Shopping")
@@ -47,6 +50,12 @@ func TestReminderToItem_FullFields(t *testing.T) {
 	}
 	if got.Completed {
 		t.Error("Completed = true, want false")
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "errand" {
+		t.Fatalf("Tags = %#v", got.Tags)
+	}
+	if len(got.RecurrenceRules) != 1 || got.RecurrenceRules[0].Frequency != eventkit.FrequencyWeekly {
+		t.Fatalf("RecurrenceRules = %#v", got.RecurrenceRules)
 	}
 	if !got.ModifiedAt.Equal(mod) {
 		t.Errorf("ModifiedAt = %v, want %v", got.ModifiedAt, mod)

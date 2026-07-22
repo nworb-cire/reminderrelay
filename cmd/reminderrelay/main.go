@@ -1,10 +1,10 @@
 // ReminderRelay is a macOS daemon that syncs Apple Reminders ↔ Home Assistant
-// todo lists bidirectionally using last-write-wins conflict resolution.
+// todo lists bidirectionally with iCloud as the conflict authority.
 //
 // Usage:
 //
 //	reminderrelay setup                     # interactive first-run wizard
-//	reminderrelay daemon [--config <path>]  # start polling + WebSocket listener
+//	reminderrelay daemon [--config <path>]  # start native push listeners
 //	reminderrelay sync-once [--config ...]  # single reconcile pass then exit
 //	reminderrelay status                    # show daemon & config state
 //	reminderrelay uninstall [--purge]       # stop daemon and remove files
@@ -117,7 +117,9 @@ func runSetup() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	wiz := setup.NewWizard(os.Stdin, os.Stdout, logger)
+	wiz := setup.NewWizard(os.Stdin, os.Stdout, logger, func(configPath string) error {
+		return startSync(configPath, false, false)
+	})
 	return wiz.Run(ctx)
 }
 
@@ -138,7 +140,7 @@ func runSync(args []string, daemon bool) error {
 func runLegacy() error {
 	defaultCfg, _ := config.DefaultPath()
 	cfgPath := flag.String("config", defaultCfg, "path to config.yaml")
-	daemon := flag.Bool("daemon", false, "run as a continuous daemon (polling + WebSocket)")
+	daemon := flag.Bool("daemon", false, "run as a continuous event-driven daemon")
 	syncOnce := flag.Bool("sync-once", false, "run a single sync pass then exit")
 	verbose := flag.Bool("verbose", false, "enable debug logging")
 	flag.Parse()
@@ -175,7 +177,7 @@ func runStatus() error {
 			fmt.Printf("  Config:    %s ✓\n", cfgPath)
 			fmt.Printf("  HA URL:    %s\n", cfg.HAURL)
 			fmt.Printf("  Lists:     %d mapping(s)\n", len(cfg.ListMappings))
-			fmt.Printf("  Poll:      %s\n", cfg.PollInterval)
+			fmt.Printf("  Recovery:  %s\n", cfg.RecoveryInterval)
 		} else {
 			fmt.Printf("  Config:    %s (invalid: %v)\n", cfgPath, loadErr)
 		}
@@ -286,7 +288,7 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 	}
 	logger.Info("config loaded",
 		"ha_url", cfg.HAURL,
-		"poll_interval", cfg.PollInterval,
+		"recovery_interval", cfg.RecoveryInterval,
 		"lists", len(cfg.ListMappings),
 	)
 
@@ -366,6 +368,13 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 		return fmt.Errorf("connecting to Home Assistant at %q: %w\n\nCheck ha_url and ha_token in your config file", cfg.HAURL, err)
 	}
 	logger.Info("Home Assistant reachable")
+	entityIDs := make([]string, 0, len(cfg.ListMappings))
+	for _, entityID := range cfg.ListMappings {
+		entityIDs = append(entityIDs, entityID)
+	}
+	if err := haAdapter.ValidateTodoEntities(ctx, entityIDs); err != nil {
+		return fmt.Errorf("validating Home Assistant todo mappings: %w", err)
+	}
 
 	// --- First-run bootstrap -------------------------------------------------
 
@@ -377,7 +386,7 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 	// --- Sync engine ---------------------------------------------------------
 
 	reconciler := syncp.NewReconciler(remAdapter, haAdapter, store, logger)
-	engine := syncp.NewEngine(reconciler, haAdapter, cfg.ListMappings, cfg.PollInterval, logger)
+	engine := syncp.NewEngine(reconciler, remAdapter, haAdapter, cfg.ListMappings, cfg.RecoveryInterval, logger)
 
 	// --- Dispatch mode -------------------------------------------------------
 
@@ -395,7 +404,7 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 	}
 
 	// daemon mode
-	logger.Info("daemon starting", "poll_interval", cfg.PollInterval)
+	logger.Info("daemon starting", "recovery_interval", cfg.RecoveryInterval)
 	if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("sync engine: %w", err)
 	}

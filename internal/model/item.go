@@ -4,9 +4,13 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/BRO3886/go-eventkit"
 )
 
 // Priority represents the priority level of a task.
@@ -60,6 +64,11 @@ type Item struct {
 	// or HA todo item UID).
 	UID string
 
+	// CanonicalUID is the Apple Reminders identifier carried inside the HA
+	// description metadata. It is empty for a brand-new HA item until iCloud
+	// accepts it.
+	CanonicalUID string
+
 	// Title is the task's display title.
 	Title string
 
@@ -74,11 +83,23 @@ type Item struct {
 	// Priority is the normalised priority level.
 	Priority Priority
 
+	// Tags are native Apple Reminders hashtags without the leading '#'.
+	Tags []string
+
+	// Assignment identifies the person assigned to a reminder in a shared
+	// iCloud list. Nil means the reminder is unassigned.
+	Assignment *Assignment
+
+	// RecurrenceRules are the native EventKit recurrence rules. Home Assistant
+	// todo entities do not have a native recurrence field, so the HA adapter
+	// round-trips these through the description metadata block.
+	RecurrenceRules []eventkit.RecurrenceRule
+
 	// Completed is true when the task has been marked as done.
 	Completed bool
 
 	// ModifiedAt is the last modification time reported by the source adapter.
-	// Used for last-write-wins conflict resolution.
+	// Retained for diagnostics and state history; iCloud wins concurrent edits.
 	ModifiedAt time.Time
 
 	// ListName is the Apple Reminders list this item belongs to.
@@ -102,8 +123,37 @@ func (i *Item) ContentHash() string {
 	h.Write([]byte("|"))
 	_, _ = fmt.Fprintf(h, "%d", i.Priority)
 	h.Write([]byte("|"))
+	tags := append([]string(nil), i.Tags...)
+	sort.Slice(tags, func(a, b int) bool {
+		return strings.ToLower(tags[a]) < strings.ToLower(tags[b])
+	})
+	for _, tag := range tags {
+		h.Write([]byte(strings.ToLower(tag)))
+		h.Write([]byte{0})
+	}
+	h.Write([]byte("|"))
+	if i.Assignment != nil {
+		h.Write([]byte(i.Assignment.ID))
+		h.Write([]byte{0})
+		h.Write([]byte(strings.ToLower(i.Assignment.Name)))
+		h.Write([]byte{0})
+		h.Write([]byte(strings.ToLower(i.Assignment.Address)))
+	}
+	h.Write([]byte("|"))
+	if recurrence, err := json.Marshal(i.RecurrenceRules); err == nil {
+		h.Write(recurrence)
+	}
+	h.Write([]byte("|"))
 	_, _ = fmt.Fprintf(h, "%t", i.Completed)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// Assignment is the stable identity and human-readable information for the
+// current assignee of a shared iCloud reminder.
+type Assignment struct {
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address,omitempty"`
 }
 
 // --- Priority prefix encoding for Home Assistant descriptions ----------------

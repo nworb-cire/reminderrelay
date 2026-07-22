@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/BRO3886/go-eventkit"
 	"github.com/njoerd114/reminderrelay/internal/model"
 	"github.com/njoerd114/reminderrelay/internal/state"
 )
@@ -12,8 +14,8 @@ import (
 // --- Mock Reminders Source ---------------------------------------------------
 
 type mockReminders struct {
-	mu    sync.Mutex
-	items map[string]*model.Item // UID → Item
+	mu      sync.Mutex
+	items   map[string]*model.Item // UID → Item
 	nextUID int
 }
 
@@ -43,7 +45,7 @@ func (m *mockReminders) FetchAll(_ context.Context, listNames []string) ([]*mode
 	return result, nil
 }
 
-func (m *mockReminders) Create(_ context.Context, item *model.Item) (string, error) {
+func (m *mockReminders) Create(_ context.Context, item *model.Item) (*model.Item, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -51,25 +53,53 @@ func (m *mockReminders) Create(_ context.Context, item *model.Item) (string, err
 	uid := fmt.Sprintf("rem-%d", m.nextUID)
 	cp := *item
 	cp.UID = uid
+	cp.CanonicalUID = uid
 	m.items[uid] = &cp
-	return uid, nil
+	return &cp, nil
 }
 
-func (m *mockReminders) Update(_ context.Context, uid string, item *model.Item) error {
+func advanceRecurringDate(due time.Time, rule eventkit.RecurrenceRule) time.Time {
+	interval := rule.Interval
+	if interval < 1 {
+		interval = 1
+	}
+	switch rule.Frequency {
+	case eventkit.FrequencyWeekly:
+		return due.AddDate(0, 0, 7*interval)
+	case eventkit.FrequencyMonthly:
+		return due.AddDate(0, interval, 0)
+	case eventkit.FrequencyYearly:
+		return due.AddDate(interval, 0, 0)
+	default:
+		return due.AddDate(0, 0, interval)
+	}
+}
+
+func (m *mockReminders) Update(_ context.Context, uid string, item *model.Item) (*model.Item, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	existing, ok := m.items[uid]
 	if !ok {
-		return fmt.Errorf("reminder %q not found", uid)
+		return nil, fmt.Errorf("reminder %q not found", uid)
 	}
-	existing.Title = item.Title
-	existing.Description = item.Description
-	existing.DueDate = item.DueDate
-	existing.Priority = item.Priority
-	existing.Completed = item.Completed
-	existing.ModifiedAt = item.ModifiedAt
-	return nil
+	cp := *item
+	cp.UID = uid
+	cp.CanonicalUID = uid
+	m.items[uid] = &cp
+	if item.Completed && !existing.Completed && len(existing.RecurrenceRules) > 0 {
+		m.nextUID++
+		next := cp
+		next.UID = fmt.Sprintf("rem-%d", m.nextUID)
+		next.CanonicalUID = next.UID
+		next.Completed = false
+		if next.DueDate != nil {
+			due := advanceRecurringDate(*next.DueDate, next.RecurrenceRules[0])
+			next.DueDate = &due
+		}
+		m.items[next.UID] = &next
+	}
+	return &cp, nil
 }
 
 func (m *mockReminders) Delete(_ context.Context, uid string) error {
@@ -135,37 +165,34 @@ func (m *mockHA) AddItem(_ context.Context, entityID string, item *model.Item) e
 	return nil
 }
 
-func (m *mockHA) UpdateItem(_ context.Context, entityID, currentTitle string, item *model.Item) error {
+func (m *mockHA) UpdateItem(_ context.Context, entityID, identifier string, item *model.Item) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	items := m.items[entityID]
 	for i, h := range items {
-		if h.Title == currentTitle {
-			items[i].Title = item.Title
-			items[i].Description = item.Description
-			items[i].DueDate = item.DueDate
-			items[i].Priority = item.Priority
-			items[i].Completed = item.Completed
-			items[i].ModifiedAt = item.ModifiedAt
+		if h.UID == identifier || h.Title == identifier {
+			uid := items[i].UID
+			items[i] = *item
+			items[i].UID = uid
 			return nil
 		}
 	}
-	return fmt.Errorf("item %q not found in %s", currentTitle, entityID)
+	return fmt.Errorf("item %q not found in %s", identifier, entityID)
 }
 
-func (m *mockHA) RemoveItem(_ context.Context, entityID, title string) error {
+func (m *mockHA) RemoveItem(_ context.Context, entityID, identifier string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	items := m.items[entityID]
 	for i, h := range items {
-		if h.Title == title {
+		if h.UID == identifier || h.Title == identifier {
 			m.items[entityID] = append(items[:i], items[i+1:]...)
 			return nil
 		}
 	}
-	return fmt.Errorf("item %q not found in %s", title, entityID)
+	return fmt.Errorf("item %q not found in %s", identifier, entityID)
 }
 
 func (m *mockHA) getItems(entityID string) []model.Item {
@@ -177,8 +204,8 @@ func (m *mockHA) getItems(entityID string) []model.Item {
 // --- Mock State Store --------------------------------------------------------
 
 type mockStore struct {
-	mu    sync.Mutex
-	items map[int64]*state.Item
+	mu     sync.Mutex
+	items  map[int64]*state.Item
 	nextID int64
 }
 

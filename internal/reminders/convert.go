@@ -1,6 +1,7 @@
 package reminders
 
 import (
+	"github.com/BRO3886/go-eventkit"
 	ekreminders "github.com/BRO3886/go-eventkit/reminders"
 
 	"github.com/njoerd114/reminderrelay/internal/model"
@@ -12,12 +13,15 @@ import (
 // config mapping key in edge cases (e.g. leading/trailing whitespace).
 func reminderToItem(r *ekreminders.Reminder, listName string) *model.Item {
 	item := &model.Item{
-		UID:         r.ID,
-		Title:       r.Title,
-		Description: r.Notes,
-		Priority:    model.NormalizePriority(int(r.Priority)),
-		Completed:   r.Completed,
-		ListName:    listName,
+		UID:             r.ID,
+		CanonicalUID:    r.ID,
+		Title:           r.Title,
+		Description:     r.Notes,
+		Priority:        model.NormalizePriority(int(r.Priority)),
+		Tags:            append([]string(nil), r.Tags...),
+		RecurrenceRules: append([]eventkit.RecurrenceRule(nil), r.RecurrenceRules...),
+		Completed:       r.Completed,
+		ListName:        listName,
 	}
 
 	if r.DueDate != nil {
@@ -35,10 +39,12 @@ func reminderToItem(r *ekreminders.Reminder, listName string) *model.Item {
 // itemToCreateInput builds an EventKit CreateReminderInput from a model.Item.
 func itemToCreateInput(item *model.Item) ekreminders.CreateReminderInput {
 	input := ekreminders.CreateReminderInput{
-		Title:    item.Title,
-		Notes:    item.Description,
-		ListName: item.ListName,
-		Priority: priorityToEventKit(item.Priority),
+		Title:           item.Title,
+		Notes:           item.Description,
+		ListName:        item.ListName,
+		Priority:        priorityToEventKit(item.Priority),
+		Tags:            append([]string(nil), item.Tags...),
+		RecurrenceRules: append([]eventkit.RecurrenceRule(nil), item.RecurrenceRules...),
 	}
 
 	if item.DueDate != nil {
@@ -57,11 +63,15 @@ func itemToUpdateInput(item *model.Item) ekreminders.UpdateReminderInput {
 	title := item.Title
 	notes := item.Description
 	prio := priorityToEventKit(item.Priority)
+	tags := append([]string(nil), item.Tags...)
+	recurrence := append([]eventkit.RecurrenceRule(nil), item.RecurrenceRules...)
 
 	input := ekreminders.UpdateReminderInput{
-		Title:    &title,
-		Notes:    &notes,
-		Priority: &prio,
+		Title:           &title,
+		Notes:           &notes,
+		Priority:        &prio,
+		Tags:            &tags,
+		RecurrenceRules: &recurrence,
 	}
 
 	if item.DueDate != nil {

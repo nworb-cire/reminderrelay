@@ -19,9 +19,10 @@ type Config struct {
 	// HAToken is the long-lived access token used to authenticate with Home Assistant.
 	HAToken string `yaml:"ha_token"`
 
-	// PollInterval controls how often Apple Reminders are polled for changes.
-	// Minimum 10s, maximum 5m. Defaults to 30s if unset.
-	PollInterval time.Duration `yaml:"poll_interval"`
+	// RecoveryInterval controls the low-frequency full reconciliation used to
+	// recover from events missed while the process or network was unavailable.
+	// Normal synchronization is push-driven by EventKit and HA WebSockets.
+	RecoveryInterval time.Duration `yaml:"recovery_interval"`
 
 	// ListMappings maps Apple Reminders list names to Home Assistant todo entity IDs.
 	// Example: {"Shopping": "todo.shopping", "Work": "todo.work_tasks"}
@@ -95,14 +96,14 @@ func (c *Config) validate() error {
 		return fmt.Errorf("ha_token is required")
 	}
 
-	if c.PollInterval == 0 {
-		c.PollInterval = 30 * time.Second
+	if c.RecoveryInterval == 0 {
+		c.RecoveryInterval = 6 * time.Hour
 	}
-	if c.PollInterval < 10*time.Second {
-		return fmt.Errorf("poll_interval %v is too short (minimum 10s)", c.PollInterval)
+	if c.RecoveryInterval < 15*time.Minute {
+		return fmt.Errorf("recovery_interval %v is too short (minimum 15m)", c.RecoveryInterval)
 	}
-	if c.PollInterval > 5*time.Minute {
-		return fmt.Errorf("poll_interval %v is too long (maximum 5m)", c.PollInterval)
+	if c.RecoveryInterval > 24*time.Hour {
+		return fmt.Errorf("recovery_interval %v is too long (maximum 24h)", c.RecoveryInterval)
 	}
 
 	if len(c.ListMappings) == 0 {

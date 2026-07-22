@@ -14,8 +14,9 @@ import (
 
 // HAEntity represents a discovered Home Assistant todo entity.
 type HAEntity struct {
-	EntityID     string
-	FriendlyName string
+	EntityID          string
+	FriendlyName      string
+	SupportedFeatures int
 }
 
 // String returns a human-readable representation for selection prompts.
@@ -61,7 +62,8 @@ func PingHA(ctx context.Context, haURL, haToken string) error {
 type haStateEntry struct {
 	EntityID   string `json:"entity_id"`
 	Attributes struct {
-		FriendlyName string `json:"friendly_name"`
+		FriendlyName      string `json:"friendly_name"`
+		SupportedFeatures int    `json:"supported_features"`
 	} `json:"attributes"`
 }
 
@@ -92,10 +94,14 @@ func DiscoverHATodoEntities(ctx context.Context, haURL, haToken string) ([]HAEnt
 
 	var entities []HAEntity
 	for _, s := range states {
-		if strings.HasPrefix(s.EntityID, "todo.") {
+		// Full-fidelity projection requires CRUD, due dates, due datetimes, and
+		// descriptions (where metadata unsupported by TodoItem is encoded).
+		const requiredTodoFeatures = 1 | 2 | 4 | 16 | 32 | 64
+		if strings.HasPrefix(s.EntityID, "todo.") && s.Attributes.SupportedFeatures&requiredTodoFeatures == requiredTodoFeatures {
 			entities = append(entities, HAEntity{
-				EntityID:     s.EntityID,
-				FriendlyName: s.Attributes.FriendlyName,
+				EntityID:          s.EntityID,
+				FriendlyName:      s.Attributes.FriendlyName,
+				SupportedFeatures: s.Attributes.SupportedFeatures,
 			})
 		}
 	}
@@ -106,8 +112,8 @@ func DiscoverHATodoEntities(ctx context.Context, haURL, haToken string) ([]HAEnt
 	return entities, nil
 }
 
-// DiscoverRemindersLists returns all Apple Reminders lists available on this
-// Mac. This triggers the macOS TCC permissions prompt on first use.
+// DiscoverRemindersLists returns writable iCloud lists only. Other reminder
+// accounts are deliberately excluded so iCloud remains the source of truth.
 func DiscoverRemindersLists(logger *slog.Logger) ([]RemindersList, error) {
 	client, err := ekreminders.New()
 	if err != nil {
@@ -123,6 +129,9 @@ func DiscoverRemindersLists(logger *slog.Logger) ([]RemindersList, error) {
 
 	var result []RemindersList
 	for _, l := range lists {
+		if l.Source != "iCloud" || l.ReadOnly {
+			continue
+		}
 		result = append(result, RemindersList{
 			Title: l.Title,
 			Count: l.Count,

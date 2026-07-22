@@ -26,7 +26,7 @@ func TestLoad_Valid(t *testing.T) {
 	path := writeConfig(t, `
 ha_url: "http://homeassistant.local:8123"
 ha_token: "abc123"
-poll_interval: 45s
+recovery_interval: 45m
 list_mappings:
   Shopping: todo.shopping
   Work: todo.work_tasks
@@ -41,15 +41,15 @@ list_mappings:
 	if cfg.HAToken != "abc123" {
 		t.Errorf("HAToken = %q, want %q", cfg.HAToken, "abc123")
 	}
-	if cfg.PollInterval != 45*time.Second {
-		t.Errorf("PollInterval = %v, want 45s", cfg.PollInterval)
+	if cfg.RecoveryInterval != 45*time.Minute {
+		t.Errorf("RecoveryInterval = %v, want 45m", cfg.RecoveryInterval)
 	}
 	if len(cfg.ListMappings) != 2 {
 		t.Errorf("ListMappings len = %d, want 2", len(cfg.ListMappings))
 	}
 }
 
-func TestLoad_DefaultPollInterval(t *testing.T) {
+func TestLoad_DefaultRecoveryInterval(t *testing.T) {
 	path := writeConfig(t, `
 ha_url: "https://ha.example.com"
 ha_token: "token"
@@ -60,8 +60,8 @@ list_mappings:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.PollInterval != 30*time.Second {
-		t.Errorf("PollInterval = %v, want default 30s", cfg.PollInterval)
+	if cfg.RecoveryInterval != 6*time.Hour {
+		t.Errorf("RecoveryInterval = %v, want default 6h", cfg.RecoveryInterval)
 	}
 }
 
@@ -102,31 +102,31 @@ list_mappings:
 	}
 }
 
-func TestLoad_PollIntervalTooShort(t *testing.T) {
+func TestLoad_RecoveryIntervalTooShort(t *testing.T) {
 	path := writeConfig(t, `
 ha_url: "http://ha.local:8123"
 ha_token: "token"
-poll_interval: 5s
+recovery_interval: 5m
 list_mappings:
   Shopping: todo.shopping
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for poll_interval < 10s, got nil")
+		t.Fatal("expected error for recovery_interval < 15m, got nil")
 	}
 }
 
-func TestLoad_PollIntervalTooLong(t *testing.T) {
+func TestLoad_RecoveryIntervalTooLong(t *testing.T) {
 	path := writeConfig(t, `
 ha_url: "http://ha.local:8123"
 ha_token: "token"
-poll_interval: 10m
+recovery_interval: 48h
 list_mappings:
   Shopping: todo.shopping
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for poll_interval > 5m, got nil")
+		t.Fatal("expected error for recovery_interval > 24h, got nil")
 	}
 }
 

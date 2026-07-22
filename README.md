@@ -1,18 +1,23 @@
 # ReminderRelay
 
-Bidirectional sync daemon that keeps **Apple Reminders** and **Home Assistant** todo lists in sync — automatically, in the background, on macOS.
+Event-driven, bidirectional sync daemon that projects **iCloud Reminders** into **Home Assistant** todo lists while keeping iCloud authoritative.
 
 ```
-Apple Reminders  ←──────────────────→  Home Assistant
-   (EventKit)          ReminderRelay      (REST + WebSocket)
+iCloud Reminders  ←──── commands ────  Home Assistant
+        │                                  ▲
+        └──── canonical projection ────────┘
+             EventKit + native push
 ```
 
 ## Features
 
-- **Bidirectional sync** — changes made in either app appear in the other within seconds.
-- **Last-write-wins conflict resolution** — the side that changed most recently wins; no silent data loss.
-- **Real-time HA updates** — WebSocket subscription for instant propagation from HA → Reminders.
-- **Polling for Reminders changes** — configurable 10 s – 5 m interval (default 30 s).
+- **iCloud is always authoritative** — HA edits are committed to iCloud first, then HA is refreshed from the accepted canonical representation. Concurrent conflicts always resolve to iCloud.
+- **Bidirectional sync** — creates, edits, completions, and deletions made in either app propagate to the other.
+- **Push on both sides** — `EKEventStoreChangedNotification` receives iCloud/Reminders changes and HA's `todo/item/subscribe` stream receives every todo-item mutation, including edits that do not change entity state.
+- **Recurring reminders** — native EventKit recurrence rules round-trip; completing an occurrence lets Reminders materialize the next occurrence, which is pushed into HA with its next due date/time.
+- **Full metadata projection** — tags, recurrence rules, assignments, exact due date/time, notes, completion, and priority round-trip. Fields HA lacks natively live in a readable JSON metadata block at the end of the description.
+- **Native assignments** — shared-list assignees are read and written through guarded ReminderKit runtime APIs on macOS. Assignees are resolved against participants already in the iCloud shared list.
+- **Recovery, not polling** — a six-hour full reconciliation is only a safety net for events missed while the daemon or network was unavailable.
 - **Priority mapping** — Apple Reminders priorities are encoded as `[High]`, `[Medium]`, `[Low]` prefixes in HA descriptions.
 - **First-run bootstrap** — interactive wizard that matches existing items between both sides by title and prompts before writing anything.
 - **Persistent state database** — SQLite tracks sync metadata so resuming after a restart is safe.
@@ -21,9 +26,9 @@ Apple Reminders  ←──────────────────→  H
 
 | Requirement | Version |
 |---|---|
-| macOS | 13 Ventura or later |
+| macOS | 26 Tahoe for the assignment bridge; EventKit fields work on earlier supported releases |
 | Apple ID / iCloud | Signed in with Reminders enabled |
-| Home Assistant | ≥ 2023.11 (Todo integration required) |
+| Home Assistant | A todo entity supporting CRUD, descriptions, due dates, and due datetimes |
 | HA long-lived access token | Profile → Security → Long-Lived Access Tokens |
 
 ## Quick Start
@@ -37,7 +42,7 @@ curl -fsSL https://get.jetify.com/devbox | bash
 ### 2. Clone and enter the dev shell
 
 ```bash
-git clone https://github.com/njoerd114/reminderrelay.git
+git clone https://github.com/nworb-cire/reminderrelay.git
 cd reminderrelay
 devbox shell
 ```
@@ -54,9 +59,10 @@ The wizard will walk you through:
 2. Discovering Reminders lists and HA todo entities
 3. Mapping lists to entities interactively
 4. Writing the config file
-5. Optionally installing as a background daemon
+5. Reviewing and running the initial iCloud-authoritative sync
+6. Optionally installing as a background daemon
 
-On first sync you will be prompted to review and confirm bootstrap matches — nothing is written until you type **y**.
+The wizard prompts you to review and confirm bootstrap matches before it installs the daemon — nothing is written until you type **y**.
 
 <details>
 <summary>Manual config (alternative to wizard)</summary>
@@ -72,7 +78,7 @@ Key fields:
 ```yaml
 ha_url: "http://homeassistant.local:8123"
 ha_token: "your-long-lived-access-token-here"
-poll_interval: 30s
+recovery_interval: 6h
 list_mappings:
   "Shopping": "todo.shopping"
   "Work":     "todo.work_tasks"
@@ -86,7 +92,7 @@ Then test with `just sync-once` and install with `just install`.
 
 ```bash
 reminderrelay setup                     # interactive first-run wizard
-reminderrelay daemon [--config <path>]  # start polling + WebSocket listener
+reminderrelay daemon [--config <path>]  # start native push listeners
 reminderrelay sync-once [--config ...]  # single reconcile pass then exit
 reminderrelay status                    # show daemon & config state
 reminderrelay uninstall [--purge]       # stop daemon and remove files
@@ -101,7 +107,7 @@ Legacy flag-based invocation (`--daemon`, `--sync-once`) is still supported for 
 |---|---|---|---|
 | `ha_url` | string | — | Home Assistant base URL (`http://…` or `https://…`) |
 | `ha_token` | string | — | Long-lived access token |
-| `poll_interval` | duration | `30s` | How often Reminders are polled (10 s – 5 m) |
+| `recovery_interval` | duration | `6h` | Safety reconciliation interval (15 m – 24 h); normal sync is push-driven |
 | `list_mappings` | map | — | `"Reminders list name": "todo.entity_id"` |
 | `telemetry` | object | *(disabled)* | Optional OpenTelemetry export (see below) |
 
@@ -130,7 +136,7 @@ Or run:
 just sync-once -- --verbose 2>&1 | grep "entity"
 ```
 
-## Priority Encoding
+## Home Assistant projection format
 
 Apple Reminders supports four priority levels.  
 Home Assistant todo has no native priority field, so ReminderRelay encodes priority as a prefix in the task description:
@@ -141,6 +147,18 @@ Home Assistant todo has no native priority field, so ReminderRelay encodes prior
 | Medium | `[Medium] ` |
 | Low | `[Low] ` |
 | None | *(no prefix)* |
+
+Tags, assignments, recurrence, and the stable iCloud reminder ID are encoded after the notes:
+
+```text
+Bring the blue bin
+
+--- ReminderRelay metadata ---
+{"version":1,"icloud_uid":"…","tags":["outside"],"assignment":{"name":"Madi","address":"…"},"recurrence":[…]}
+--- End ReminderRelay metadata ---
+```
+
+The block is deliberately editable. An HA edit is treated as a requested iCloud change. iCloud normalizes or rejects it, and the next HA state is always rebuilt from iCloud. Assignment names, addresses, or stable IDs must identify a participant in that reminder's shared iCloud list.
 
 ## Justfile Recipes
 
@@ -199,9 +217,13 @@ rm ~/.local/share/reminderrelay/state.db
 just sync-once
 ```
 
-### Sync is slow
+### A mapped HA todo entity is rejected
 
-Decrease `poll_interval` (minimum `10s`). Real-time HA → Reminders flow is already push-based via WebSocket; the interval only affects Reminders → HA propagation.
+ReminderRelay refuses todo providers that cannot preserve CRUD, descriptions, dates, and date-times. Create a **Local to-do** list in Home Assistant and map the iCloud list to that entity.
+
+### Push connection was interrupted
+
+Both listeners reconnect automatically. `recovery_interval` controls the low-frequency safety reconciliation; reducing it should not be necessary during normal operation.
 
 ## Architecture
 
@@ -209,9 +231,9 @@ Decrease `poll_interval` (minimum `10s`). Real-time HA → Reminders flow is alr
 cmd/reminderrelay/        Entry point, subcommand dispatch, wiring
 internal/config/          YAML config loader + validation
 internal/state/           SQLite repository (WAL mode)
-internal/model/           Shared Item type, priority encoding, content hash
-internal/reminders/       Apple Reminders adapter (EventKit via cgo)
-internal/homeassistant/   HA REST + WebSocket adapter, retry logic
+internal/model/           Shared Item type, metadata codec, content hash
+internal/reminders/       EventKit adapter + guarded assignment bridge
+internal/homeassistant/   HA REST + native todo WebSocket subscription
 internal/sync/            Reconciler, bootstrap wizard, daemon engine
 internal/setup/           Interactive setup wizard, daemon install/uninstall
 internal/telemetry/       Optional OpenTelemetry OTLP gRPC export

@@ -14,22 +14,22 @@ import (
 type action int
 
 const (
-	actionNone         action = iota
-	actionCreateInHA          // item exists in Reminders only → push to HA
-	actionCreateInRem         // item exists in HA only → push to Reminders
-	actionUpdateHA            // Reminders is the winner → push to HA
-	actionUpdateRem           // HA is the winner → push to Reminders
-	actionDeleteFromHA        // item deleted from Reminders → remove from HA
-	actionDeleteFromRem       // item deleted from HA → remove from Reminders
+	actionNone          action = iota
+	actionCreateInHA           // item exists in Reminders only → push to HA
+	actionCreateInRem          // item exists in HA only → push to Reminders
+	actionUpdateHA             // Reminders is the winner → push to HA
+	actionUpdateRem            // HA is the winner → push to Reminders
+	actionDeleteFromHA         // item deleted from Reminders → remove from HA
+	actionDeleteFromRem        // item deleted from HA → remove from Reminders
 )
 
 // Stats tracks the number of mutations performed in a single reconcile pass.
 type Stats struct {
-	Created  int
-	Updated  int
-	Deleted  int
+	Created   int
+	Updated   int
+	Deleted   int
 	Conflicts int
-	Errors   int
+	Errors    int
 }
 
 // Reconciler performs a single bidirectional sync pass across all configured
@@ -270,18 +270,15 @@ func (r *Reconciler) decide(si *state.Item, remItem, haItem *model.Item) action 
 		return actionUpdateRem
 	}
 
-	// Both changed → conflict → last-write-wins.
+	// Both changed → iCloud wins. Home Assistant is a writable projection, but
+	// Apple Reminders is always the canonical state and conflict authority.
 	r.log.Info("conflict detected",
 		"title", si.Title,
 		"reminders_modified", remItem.ModifiedAt,
 		"ha_modified", haItem.ModifiedAt,
 	)
 
-	if !remItem.ModifiedAt.Before(haItem.ModifiedAt) {
-		// Reminders wins (equal timestamps also favour Reminders as the "primary" source).
-		return actionUpdateHA
-	}
-	return actionUpdateRem
+	return actionUpdateHA
 }
 
 // execute dispatches the decided action to the appropriate adapter and
@@ -307,7 +304,7 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 
 	case actionDeleteFromHA:
 		if haItem != nil {
-			if err := r.ha.RemoveItem(ctx, entityID, haItem.Title); err != nil {
+			if err := r.ha.RemoveItem(ctx, entityID, haItem.UID); err != nil {
 				return fmt.Errorf("deleting %q from HA: %w", si.Title, err)
 			}
 		}
@@ -324,11 +321,11 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 	case actionUpdateHA:
 		// Use the HA item's current title to identify it (may differ from
 		// state DB title if both sides changed).
-		currentHATitle := si.Title
+		currentHAIdentifier := si.HAUID
 		if haItem != nil {
-			currentHATitle = haItem.Title
+			currentHAIdentifier = haItem.UID
 		}
-		if err := r.ha.UpdateItem(ctx, entityID, currentHATitle, remItem); err != nil {
+		if err := r.ha.UpdateItem(ctx, entityID, currentHAIdentifier, remItem); err != nil {
 			return fmt.Errorf("updating %q in HA: %w", remItem.Title, err)
 		}
 		si.Title = remItem.Title
@@ -338,11 +335,19 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 		return r.store.UpsertItem(ctx, si)
 
 	case actionUpdateRem:
-		if err := r.rem.Update(ctx, si.RemindersUID, haItem); err != nil {
+		canonical, err := r.rem.Update(ctx, si.RemindersUID, haItem)
+		if err != nil {
 			return fmt.Errorf("updating %q in Reminders: %w", haItem.Title, err)
 		}
-		si.Title = haItem.Title
-		si.LastSyncHash = haItem.ContentHash()
+		// Echo the committed iCloud representation back to HA. This is important
+		// for recurrence (completion may materialize another occurrence) and for
+		// metadata normalized by ReminderKit.
+		if err := r.ha.UpdateItem(ctx, entityID, haItem.UID, canonical); err != nil {
+			return fmt.Errorf("refreshing %q from canonical iCloud state: %w", canonical.Title, err)
+		}
+		si.Title = canonical.Title
+		si.LastSyncHash = canonical.ContentHash()
+		si.RemindersModified = canonical.ModifiedAt
 		si.HAModified = haItem.ModifiedAt
 		si.LastSyncedAt = now
 		return r.store.UpsertItem(ctx, si)
@@ -365,7 +370,7 @@ func (r *Reconciler) createInHA(ctx context.Context, remItem *model.Item, entity
 
 	var haUID string
 	for _, h := range haItems {
-		if h.Title == remItem.Title {
+		if h.CanonicalUID == remItem.UID || (h.CanonicalUID == "" && h.Title == remItem.Title) {
 			haUID = h.UID
 			break
 		}
@@ -386,20 +391,24 @@ func (r *Reconciler) createInHA(ctx context.Context, remItem *model.Item, entity
 
 // createInReminders pushes a new HA item to Reminders and writes the state DB entry.
 func (r *Reconciler) createInReminders(ctx context.Context, haItem *model.Item, entityID string) error {
-	uid, err := r.rem.Create(ctx, haItem)
+	canonical, err := r.rem.Create(ctx, haItem)
 	if err != nil {
 		return fmt.Errorf("creating %q in Reminders: %w", haItem.Title, err)
+	}
+	if err := r.ha.UpdateItem(ctx, entityID, haItem.UID, canonical); err != nil {
+		return fmt.Errorf("refreshing new item %q from canonical iCloud state: %w", canonical.Title, err)
 	}
 
 	now := time.Now().UTC()
 	si := &state.Item{
-		RemindersUID: uid,
-		HAUID:        haItem.UID,
-		ListName:     haItem.ListName,
-		Title:        haItem.Title,
-		LastSyncHash: haItem.ContentHash(),
-		HAModified:   haItem.ModifiedAt,
-		LastSyncedAt: now,
+		RemindersUID:      canonical.UID,
+		HAUID:             haItem.UID,
+		ListName:          haItem.ListName,
+		Title:             canonical.Title,
+		LastSyncHash:      canonical.ContentHash(),
+		RemindersModified: canonical.ModifiedAt,
+		HAModified:        haItem.ModifiedAt,
+		LastSyncedAt:      now,
 	}
 	return r.store.UpsertItem(ctx, si)
 }

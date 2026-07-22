@@ -40,14 +40,18 @@ type haItemsResponse struct {
 // prefix (e.g. "[High] ") is stripped from the description and decoded into
 // the Priority field.
 func haItemToModelItem(h haTodoItem) model.Item {
-	priority, description := model.DecodePriorityPrefix(h.Description)
+	priority, description, canonicalUID, tags, assignment, recurrence := model.DecodeHADescription(h.Description)
 
 	item := model.Item{
-		UID:         h.UID,
-		Title:       h.Summary,
-		Description: description,
-		Priority:    priority,
-		Completed:   h.Status == statusCompleted,
+		UID:             h.UID,
+		CanonicalUID:    canonicalUID,
+		Title:           h.Summary,
+		Description:     description,
+		Priority:        priority,
+		Tags:            tags,
+		Assignment:      assignment,
+		RecurrenceRules: recurrence,
+		Completed:       h.Status == statusCompleted,
 	}
 
 	if h.Due != "" {
@@ -66,36 +70,29 @@ func buildAddItemData(entityID string, item *model.Item) map[string]interface{} 
 		"item":      item.Title,
 	}
 
-	desc := model.EncodePriorityPrefix(item.Priority, item.Description)
+	desc := model.EncodeHADescription(item)
 	if desc != "" {
 		data["description"] = desc
 	}
 
-	if item.DueDate != nil {
-		data["due_date"] = formatDue(item.DueDate)
-	}
+	addDue(data, item.DueDate, false)
 
 	return data
 }
 
 // buildUpdateItemData returns the service-call payload for todo.update_item.
-// currentTitle is the item's title as it currently exists in HA, used to
-// identify the item.
-func buildUpdateItemData(entityID, currentTitle string, item *model.Item) map[string]interface{} {
+// identifier is the stable HA item UID used to identify the item.
+func buildUpdateItemData(entityID, identifier string, item *model.Item) map[string]interface{} {
 	data := map[string]interface{}{
 		"entity_id": entityID,
-		"item":      currentTitle,
+		"item":      identifier,
 	}
 
-	if item.Title != currentTitle {
-		data["rename"] = item.Title
-	}
+	data["rename"] = item.Title
 
-	data["description"] = model.EncodePriorityPrefix(item.Priority, item.Description)
+	data["description"] = model.EncodeHADescription(item)
 
-	if item.DueDate != nil {
-		data["due_date"] = formatDue(item.DueDate)
-	}
+	addDue(data, item.DueDate, true)
 
 	if item.Completed {
 		data["status"] = statusCompleted
@@ -107,10 +104,10 @@ func buildUpdateItemData(entityID, currentTitle string, item *model.Item) map[st
 }
 
 // buildRemoveItemData returns the service-call payload for todo.remove_item.
-func buildRemoveItemData(entityID, title string) map[string]interface{} {
+func buildRemoveItemData(entityID, identifier string) map[string]interface{} {
 	return map[string]interface{}{
 		"entity_id": entityID,
-		"item":      title,
+		"item":      identifier,
 	}
 }
 
@@ -131,6 +128,23 @@ func parseDue(s string) (time.Time, error) {
 }
 
 // formatDue formats a time value as a date-only string for HA.
-func formatDue(t *time.Time) string {
-	return t.Format(dateLayout)
+func addDue(data map[string]interface{}, due *time.Time, clear bool) {
+	if due == nil {
+		if clear {
+			data["due_date"] = nil
+		}
+		return
+	}
+	if due.Hour() == 0 && due.Minute() == 0 && due.Second() == 0 && due.Nanosecond() == 0 {
+		data["due_date"] = formatDue(due)
+		return
+	}
+	data["due_datetime"] = formatDue(due)
+}
+
+func formatDue(due *time.Time) string {
+	if due.Hour() == 0 && due.Minute() == 0 && due.Second() == 0 && due.Nanosecond() == 0 {
+		return due.Format(dateLayout)
+	}
+	return due.Format(time.RFC3339)
 }

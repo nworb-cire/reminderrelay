@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -100,8 +101,8 @@ func TestBootstrap_CancelledByUser(t *testing.T) {
 
 	b := NewBootstrap(rem, ha, store, slog.Default(), input, &output)
 	ran, err := b.Run(context.Background(), testMappings)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrBootstrapCancelled) {
+		t.Fatalf("error = %v, want ErrBootstrapCancelled", err)
 	}
 	if ran {
 		t.Error("bootstrap should not execute when user says no")
@@ -175,6 +176,45 @@ func TestMatchByTitle_AllMatched(t *testing.T) {
 	}
 	if len(result.remOnly) != 0 || len(result.haOnly) != 0 {
 		t.Errorf("expected no unmatched, got remOnly=%d haOnly=%d", len(result.remOnly), len(result.haOnly))
+	}
+}
+
+func TestMatchByTitle_DuplicateTitlesArePairedOnce(t *testing.T) {
+	now := time.Now().UTC()
+	remItems := []*model.Item{
+		newItem("rem-1", "Laundry", "Shopping", model.PriorityNone, false, now),
+		newItem("rem-2", "Laundry", "Shopping", model.PriorityNone, false, now),
+	}
+	haItems := []model.Item{
+		{UID: "ha-1", Title: "Laundry", ModifiedAt: now},
+		{UID: "ha-2", Title: "Laundry", ModifiedAt: now},
+	}
+
+	result := matchByTitle("Shopping", "todo.shopping", remItems, haItems)
+
+	if len(result.matched) != 2 {
+		t.Fatalf("matched = %d, want 2", len(result.matched))
+	}
+	if result.matched[0].ha.UID == result.matched[1].ha.UID {
+		t.Fatalf("both reminders matched the same HA item %q", result.matched[0].ha.UID)
+	}
+}
+
+func TestMatchByTitle_CanonicalUIDWinsOverTitle(t *testing.T) {
+	now := time.Now().UTC()
+	rem := newItem("rem-1", "Canonical title", "Shopping", model.PriorityNone, false, now)
+	haItems := []model.Item{
+		{UID: "ha-1", CanonicalUID: "rem-1", Title: "Stale title", ModifiedAt: now},
+		{UID: "ha-2", Title: "Canonical title", ModifiedAt: now},
+	}
+
+	result := matchByTitle("Shopping", "todo.shopping", []*model.Item{rem}, haItems)
+
+	if len(result.matched) != 1 || result.matched[0].ha.UID != "ha-1" {
+		t.Fatalf("canonical match = %#v, want ha-1", result.matched)
+	}
+	if len(result.haOnly) != 1 || result.haOnly[0].UID != "ha-2" {
+		t.Fatalf("unmatched HA items = %#v, want ha-2", result.haOnly)
 	}
 }
 

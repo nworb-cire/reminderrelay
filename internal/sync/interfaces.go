@@ -5,7 +5,7 @@
 //
 // The package contains two main components:
 //
-//   - [Engine] runs the polling loop and optional WebSocket listener.
+//   - [Engine] consumes EventKit and Home Assistant push streams.
 //   - [Bootstrap] handles first-run title-matching to link existing
 //     items on both sides.
 package sync
@@ -21,8 +21,8 @@ import (
 // Implemented by [reminders.Adapter].
 type RemindersSource interface {
 	FetchAll(ctx context.Context, listNames []string) ([]*model.Item, error)
-	Create(ctx context.Context, item *model.Item) (uid string, err error)
-	Update(ctx context.Context, uid string, item *model.Item) error
+	Create(ctx context.Context, item *model.Item) (*model.Item, error)
+	Update(ctx context.Context, uid string, item *model.Item) (*model.Item, error)
 	Delete(ctx context.Context, uid string) error
 }
 
@@ -31,8 +31,8 @@ type RemindersSource interface {
 type HASource interface {
 	GetItems(ctx context.Context, entityID string) ([]model.Item, error)
 	AddItem(ctx context.Context, entityID string, item *model.Item) error
-	UpdateItem(ctx context.Context, entityID, currentTitle string, item *model.Item) error
-	RemoveItem(ctx context.Context, entityID, title string) error
+	UpdateItem(ctx context.Context, entityID, identifier string, item *model.Item) error
+	RemoveItem(ctx context.Context, entityID, identifier string) error
 }
 
 // StateStore provides access to the sync state database.

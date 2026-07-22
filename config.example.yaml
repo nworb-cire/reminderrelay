@@ -9,9 +9,9 @@ ha_url: "http://homeassistant.local:8123"
 # Generate one in HA → Profile → Security → Long-Lived Access Tokens.
 ha_token: "your-long-lived-access-token-here"
 
-# How often Apple Reminders are polled for changes.
-# Minimum: 10s  Maximum: 5m  Default: 30s
-poll_interval: 30s
+# Safety reconciliation after missed events (normal sync is push-driven).
+# Minimum: 15m  Maximum: 24h  Default: 6h
+recovery_interval: 6h
 
 # Map each Apple Reminders list name to a Home Assistant todo entity ID.
 # The Reminders list name is case-sensitive and must match exactly.

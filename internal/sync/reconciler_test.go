@@ -6,9 +6,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BRO3886/go-eventkit"
 	"github.com/njoerd114/reminderrelay/internal/model"
 	"github.com/njoerd114/reminderrelay/internal/state"
 )
+
+func TestReconcile_RecurringCompletionCreatesNextOccurrence(t *testing.T) {
+	due := time.Date(2026, 7, 20, 18, 30, 0, 0, time.UTC)
+	original := newItem("rem-1", "Take bins out", "Shopping", model.PriorityNone, false, due.Add(-time.Hour))
+	original.DueDate = &due
+	original.RecurrenceRules = []eventkit.RecurrenceRule{eventkit.Weekly(1, eventkit.Monday)}
+
+	store := newMockStore()
+	store.seed(&state.Item{
+		RemindersUID: "rem-1",
+		HAUID:        "ha-1",
+		ListName:     "Shopping",
+		Title:        original.Title,
+		LastSyncHash: original.ContentHash(),
+	})
+	rem := newMockReminders(original)
+	ha := newMockHA()
+	completed := *original
+	completed.UID = "ha-1"
+	completed.Completed = true
+	ha.addItems("todo.shopping", completed)
+
+	reconciler := NewReconciler(rem, ha, store, testLogger)
+	if _, err := reconciler.Run(context.Background(), testMappings); err != nil {
+		t.Fatalf("completion reconcile: %v", err)
+	}
+	if _, err := reconciler.Run(context.Background(), testMappings); err != nil {
+		t.Fatalf("next-occurrence reconcile: %v", err)
+	}
+
+	items := ha.getItems("todo.shopping")
+	if len(items) != 2 {
+		t.Fatalf("HA items = %d, want completed occurrence plus next occurrence", len(items))
+	}
+	var next *model.Item
+	for i := range items {
+		if !items[i].Completed {
+			next = &items[i]
+		}
+	}
+	wantDue := due.AddDate(0, 0, 7)
+	if next == nil || next.DueDate == nil || !next.DueDate.Equal(wantDue) {
+		t.Fatalf("next occurrence = %#v, want due %s", next, wantDue)
+	}
+}
 
 var (
 	testLogger   = slog.Default()
@@ -102,7 +148,7 @@ func TestReconcile_NewHAItem_CreatedInReminders(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 3: Both sides updated, Reminders newer → Reminders wins
+// Scenario 3: Both sides updated → iCloud wins
 // ---------------------------------------------------------------------------
 
 func TestReconcile_Conflict_RemindersWins(t *testing.T) {
@@ -160,10 +206,10 @@ func TestReconcile_Conflict_RemindersWins(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 4: Both sides updated, HA newer → HA wins
+// Scenario 4: Both sides updated, HA newer → iCloud still wins
 // ---------------------------------------------------------------------------
 
-func TestReconcile_Conflict_HAWins(t *testing.T) {
+func TestReconcile_Conflict_ICloudWinsEvenWhenHAIsNewer(t *testing.T) {
 	older := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	remTime := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	haTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -204,14 +250,18 @@ func TestReconcile_Conflict_HAWins(t *testing.T) {
 		t.Errorf("Updated = %d, want 1", stats.Updated)
 	}
 
-	// Reminders should have HA's version.
+	// Reminders remains canonical and HA is overwritten with its version.
 	got := rem.get("rem-1")
-	if got == nil || got.Title != "Buy whole milk" {
+	if got == nil || got.Title != "Buy skim milk" {
 		title := ""
 		if got != nil {
 			title = got.Title
 		}
-		t.Errorf("Reminders item title = %q, want %q", title, "Buy whole milk")
+		t.Errorf("Reminders item title = %q, want %q", title, "Buy skim milk")
+	}
+	haItems := ha.getItems("todo.shopping")
+	if len(haItems) != 1 || haItems[0].Title != "Buy skim milk" {
+		t.Fatalf("HA was not refreshed from iCloud: %#v", haItems)
 	}
 }
 

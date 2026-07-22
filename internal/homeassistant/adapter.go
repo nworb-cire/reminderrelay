@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/gorilla/websocket"
 	haclient "github.com/mkelcik/go-ha-client/v2"
 
 	"github.com/njoerd114/reminderrelay/internal/model"
@@ -88,13 +90,15 @@ func (w *haClientWrapper) CallServiceWithResponse(ctx context.Context, domain, s
 // lists via the REST and WebSocket APIs. Create one with [NewAdapter] or
 // [NewAdapterWithClient].
 type Adapter struct {
-	rest   RESTClient
-	ws     *haclient.WSClient
-	logger *slog.Logger
+	rest    RESTClient
+	baseURL string
+	wsURL   string
+	token   string
+	logger  *slog.Logger
 }
 
-// NewAdapter creates an Adapter backed by real HA REST and WebSocket clients.
-// The WebSocket is configured with unlimited auto-reconnect.
+// NewAdapter creates an Adapter backed by HA REST and the native todo item
+// WebSocket subscription API.
 func NewAdapter(haURL, token string, logger *slog.Logger) (*Adapter, error) {
 	rest, err := haclient.NewClient(haURL,
 		haclient.WithToken(token),
@@ -111,18 +115,11 @@ func NewAdapter(haURL, token string, logger *slog.Logger) (*Adapter, error) {
 		hc:      &http.Client{},
 	}
 
-	ws := rest.WS(
-		haclient.WithAutoReconnect(true),
-		haclient.WithMaxRetries(0), // unlimited retries
-		haclient.WithOnReconnect(func() {
-			logger.Info("HA WebSocket reconnected")
-		}),
-		haclient.WithOnReconnectError(func(err error) {
-			logger.Error("HA WebSocket reconnect failed", "error", err)
-		}),
-	)
-
-	return &Adapter{rest: wrapper, ws: ws, logger: logger}, nil
+	wsURL, err := websocketURL(haURL)
+	if err != nil {
+		return nil, err
+	}
+	return &Adapter{rest: wrapper, baseURL: haURL, wsURL: wsURL, token: token, logger: logger}, nil
 }
 
 // NewAdapterWithClient creates an Adapter with a caller-supplied REST client.
@@ -143,21 +140,59 @@ func (a *Adapter) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Connect establishes the WebSocket connection. Must be called before
-// [Adapter.SubscribeChanges].
-func (a *Adapter) Connect(ctx context.Context) error {
-	if a.ws == nil {
-		return fmt.Errorf("WebSocket client not configured")
+// ValidateTodoEntities ensures mapped HA entities can preserve every field
+// ReminderRelay projects. Failing early avoids silently dropping due times or
+// metadata on an integration that only implements a subset of TodoItem.
+func (a *Adapter) ValidateTodoEntities(ctx context.Context, entityIDs []string) error {
+	const required = 1 | 2 | 4 | 16 | 32 | 64
+	for _, entityID := range entityIDs {
+		endpoint := strings.TrimRight(a.baseURL, "/") + "/api/states/" + url.PathEscape(entityID)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", entityID, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+a.token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", entityID, err)
+		}
+		var state struct {
+			Attributes struct {
+				SupportedFeatures int `json:"supported_features"`
+			} `json:"attributes"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&state)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("mapped HA todo entity %s returned HTTP %d", entityID, resp.StatusCode)
+		}
+		if decodeErr != nil {
+			return fmt.Errorf("decode state for %s: %w", entityID, decodeErr)
+		}
+		if state.Attributes.SupportedFeatures&required != required {
+			return fmt.Errorf("mapped HA todo entity %s lacks required CRUD, due-date/time, or description support (supported_features=%d)", entityID, state.Attributes.SupportedFeatures)
+		}
 	}
-	return a.ws.Connect(ctx)
+	return nil
 }
 
-// Close shuts down the WebSocket connection gracefully.
-func (a *Adapter) Close() error {
-	if a.ws == nil {
-		return nil
+// Connect verifies WebSocket authentication. SubscribeChanges owns the
+// long-lived connection and reconnect loop.
+func (a *Adapter) Connect(ctx context.Context) error {
+	if a.wsURL == "" {
+		return fmt.Errorf("WebSocket client not configured")
 	}
-	return a.ws.Close()
+	conn, err := a.dialAndAuthenticate(ctx)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// Close is retained for the Engine connector interface. The subscription
+// connection is context-owned and closes itself on cancellation.
+func (a *Adapter) Close() error {
+	return nil
 }
 
 // GetItems fetches all todo items for the given HA entity.
@@ -190,77 +225,163 @@ func (a *Adapter) AddItem(ctx context.Context, entityID string, item *model.Item
 	return nil
 }
 
-// UpdateItem updates an existing todo item in HA. currentTitle is the item's
-// title as it currently exists in HA, used to identify the target item.
-func (a *Adapter) UpdateItem(ctx context.Context, entityID, currentTitle string, item *model.Item) error {
-	data := buildUpdateItemData(entityID, currentTitle, item)
+// UpdateItem updates an existing todo item in HA by stable item UID.
+func (a *Adapter) UpdateItem(ctx context.Context, entityID, identifier string, item *model.Item) error {
+	data := buildUpdateItemData(entityID, identifier, item)
 	err := Retry(ctx, defaultMaxAttempts, func() error {
 		return a.rest.CallService(ctx, domainTodo, serviceUpdateItem, serviceBody(data))
 	})
 	if err != nil {
-		return fmt.Errorf("update item %q in %s: %w", currentTitle, entityID, err)
+		return fmt.Errorf("update item %q in %s: %w", identifier, entityID, err)
 	}
 	return nil
 }
 
-// RemoveItem deletes a todo item from HA by its current title.
-func (a *Adapter) RemoveItem(ctx context.Context, entityID, title string) error {
-	data := buildRemoveItemData(entityID, title)
+// RemoveItem deletes a todo item from HA by stable item UID.
+func (a *Adapter) RemoveItem(ctx context.Context, entityID, identifier string) error {
+	data := buildRemoveItemData(entityID, identifier)
 	err := Retry(ctx, defaultMaxAttempts, func() error {
 		return a.rest.CallService(ctx, domainTodo, serviceRemoveItem, serviceBody(data))
 	})
 	if err != nil {
-		return fmt.Errorf("remove item %q from %s: %w", title, entityID, err)
+		return fmt.Errorf("remove item %q from %s: %w", identifier, entityID, err)
 	}
 	return nil
 }
 
-// SubscribeChanges starts a WebSocket subscription for state_changed events
-// on the given todo entities. When any tracked entity changes, callback is
-// invoked with the entity ID. This method blocks until ctx is cancelled.
+// SubscribeChanges uses Home Assistant's dedicated todo/item/subscribe
+// WebSocket command. Unlike state_changed, this fires for item edits that do
+// not change the entity's incomplete-count state (for example title, due time,
+// tags in the metadata block, or assignment).
 func (a *Adapter) SubscribeChanges(ctx context.Context, entityIDs []string, callback func(entityID string)) error {
-	if a.ws == nil {
+	if a.wsURL == "" {
 		return fmt.Errorf("WebSocket client not configured")
 	}
-
-	// Build a set for O(1) lookup.
-	entitySet := make(map[string]struct{}, len(entityIDs))
-	for _, id := range entityIDs {
-		entitySet[id] = struct{}{}
-	}
-
-	sub, err := a.ws.SubscribeEvents(ctx, haclient.EventTypeStateChanged)
-	if err != nil {
-		return fmt.Errorf("subscribe state_changed: %w", err)
-	}
-	defer func() { _ = sub.Unsubscribe(ctx) }()
-
+	backoff := time.Second
 	for {
+		err := a.subscribeTodoItemsOnce(ctx, entityIDs, callback)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		a.logger.Warn("HA todo subscription disconnected; reconnecting", "error", err, "backoff", backoff)
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case ev, ok := <-sub.Events():
-			if !ok {
-				return fmt.Errorf("subscription events channel closed")
+		case <-timer.C:
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+type wsMessage struct {
+	ID      int             `json:"id,omitempty"`
+	Type    string          `json:"type"`
+	Success bool            `json:"success,omitempty"`
+	Message string          `json:"message,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
+}
+
+func websocketURL(haURL string) (string, error) {
+	parsed, err := url.Parse(haURL)
+	if err != nil {
+		return "", fmt.Errorf("parse HA URL for WebSocket: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http":
+		parsed.Scheme = "ws"
+	case "https":
+		parsed.Scheme = "wss"
+	default:
+		return "", fmt.Errorf("HA URL scheme %q cannot be used for WebSocket", parsed.Scheme)
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/websocket"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func (a *Adapter) dialAndAuthenticate(ctx context.Context) (*websocket.Conn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, a.wsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dial HA WebSocket: %w", err)
+	}
+	fail := func(err error) (*websocket.Conn, error) {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	var message wsMessage
+	if err := conn.ReadJSON(&message); err != nil {
+		return fail(fmt.Errorf("read HA authentication challenge: %w", err))
+	}
+	if message.Type != "auth_required" {
+		return fail(fmt.Errorf("unexpected HA WebSocket greeting %q", message.Type))
+	}
+	if err := conn.WriteJSON(map[string]interface{}{
+		"type":         "auth",
+		"access_token": a.token,
+	}); err != nil {
+		return fail(fmt.Errorf("send HA WebSocket authentication: %w", err))
+	}
+	if err := conn.ReadJSON(&message); err != nil {
+		return fail(fmt.Errorf("read HA WebSocket authentication result: %w", err))
+	}
+	if message.Type != "auth_ok" {
+		return fail(fmt.Errorf("HA WebSocket authentication failed: %s", message.Message))
+	}
+	return conn, nil
+}
+
+func (a *Adapter) subscribeTodoItemsOnce(ctx context.Context, entityIDs []string, callback func(string)) error {
+	conn, err := a.dialAndAuthenticate(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	stopCloser := make(chan struct{})
+	defer close(stopCloser)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopCloser:
+		}
+	}()
+
+	entityByID := make(map[int]string, len(entityIDs))
+	for i, entityID := range entityIDs {
+		id := i + 1
+		entityByID[id] = entityID
+		if err := conn.WriteJSON(map[string]interface{}{
+			"id":        id,
+			"type":      "todo/item/subscribe",
+			"entity_id": entityID,
+		}); err != nil {
+			return fmt.Errorf("subscribe to %s: %w", entityID, err)
+		}
+	}
+
+	for {
+		var message wsMessage
+		if err := conn.ReadJSON(&message); err != nil {
+			return err
+		}
+		entityID, tracked := entityByID[message.ID]
+		if !tracked {
+			continue
+		}
+		switch message.Type {
+		case "result":
+			if !message.Success {
+				return fmt.Errorf("HA rejected todo subscription for %s: %s", entityID, message.Error)
 			}
-			data, isStateChanged, parseErr := ev.StateChanged()
-			if parseErr != nil {
-				a.logger.Debug("failed to parse state_changed event", "error", parseErr)
-				continue
-			}
-			if !isStateChanged {
-				continue
-			}
-			if _, tracked := entitySet[data.EntityID]; tracked {
-				a.logger.Debug("tracked entity changed", "entity_id", data.EntityID)
-				callback(data.EntityID)
-			}
-		case subErr, ok := <-sub.Errors():
-			if !ok {
-				return fmt.Errorf("subscription errors channel closed")
-			}
-			a.logger.Error("subscription error", "error", subErr)
-			// Auto-reconnect restores the subscription; just log.
+		case "event":
+			callback(entityID)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -31,28 +32,35 @@ type HAConnector interface {
 	SubscribeChanges(ctx context.Context, entityIDs []string, callback func(entityID string)) error
 }
 
-// Engine orchestrates the sync lifecycle: polling loop + optional WebSocket
-// listener for instant HA updates. Create one with [NewEngine] and start it
-// with [Engine.Run].
-type Engine struct {
-	reconciler   *Reconciler
-	haConn       HAConnector
-	listMappings map[string]string
-	pollInterval time.Duration
-	log          *slog.Logger
-
-	// OTel instruments — always non-nil (no-op when telemetry is disabled).
-	tracer     trace.Tracer
-	cntCreated metric.Int64Counter
-	cntUpdated metric.Int64Counter
-	cntDeleted metric.Int64Counter
-	cntConflicts metric.Int64Counter
-	cntErrors  metric.Int64Counter
+// RemindersConnector receives native EventKit database-change notifications.
+// Implemented by [reminders.Adapter].
+type RemindersConnector interface {
+	WatchChanges(ctx context.Context) (<-chan struct{}, error)
 }
 
-// NewEngine creates an Engine. If haConn is nil, WebSocket subscriptions are
-// skipped and the engine runs polling-only.
-func NewEngine(reconciler *Reconciler, haConn HAConnector, listMappings map[string]string, pollInterval time.Duration, logger *slog.Logger) *Engine {
+// Engine orchestrates the sync lifecycle from EventKit notifications and Home
+// Assistant WebSocket events. A low-frequency recovery pass protects against
+// process/network gaps; it is not the primary change-detection mechanism.
+type Engine struct {
+	reconciler       *Reconciler
+	remConn          RemindersConnector
+	haConn           HAConnector
+	listMappings     map[string]string
+	recoveryInterval time.Duration
+	log              *slog.Logger
+
+	// OTel instruments — always non-nil (no-op when telemetry is disabled).
+	tracer       trace.Tracer
+	cntCreated   metric.Int64Counter
+	cntUpdated   metric.Int64Counter
+	cntDeleted   metric.Int64Counter
+	cntConflicts metric.Int64Counter
+	cntErrors    metric.Int64Counter
+}
+
+// NewEngine creates an Engine. Nil connectors disable that side's push stream;
+// the recovery pass remains available as a safety net.
+func NewEngine(reconciler *Reconciler, remConn RemindersConnector, haConn HAConnector, listMappings map[string]string, recoveryInterval time.Duration, logger *slog.Logger) *Engine {
 	tracer := otel.Tracer(otelScope)
 	meter := otel.Meter(otelScope)
 
@@ -66,11 +74,12 @@ func NewEngine(reconciler *Reconciler, haConn HAConnector, listMappings map[stri
 	}
 
 	return &Engine{
-		reconciler:   reconciler,
-		haConn:       haConn,
-		listMappings: listMappings,
-		pollInterval: pollInterval,
-		log:          logger,
+		reconciler:       reconciler,
+		remConn:          remConn,
+		haConn:           haConn,
+		listMappings:     listMappings,
+		recoveryInterval: recoveryInterval,
+		log:              logger,
 
 		tracer:       tracer,
 		cntCreated:   mustCounter(metricCreated, "Number of items created during sync"),
@@ -123,53 +132,69 @@ func (e *Engine) RunOnce(ctx context.Context) (Stats, error) {
 	return e.reconcile(ctx)
 }
 
-// Run starts the polling loop and optional WebSocket listener. It blocks until
-// ctx is cancelled.
+// Run starts EventKit and HA WebSocket listeners plus a low-frequency recovery
+// ticker. Reconciliation is serialized through one queue so a burst of push
+// events cannot race state database writes.
 func (e *Engine) Run(ctx context.Context) error {
-	// Start WS listener if available.
-	if e.haConn != nil {
-		if err := e.haConn.Connect(ctx); err != nil {
-			e.log.Error("WebSocket connection failed, falling back to polling-only", "error", err)
-		} else {
-			defer func() { _ = e.haConn.Close() }()
-
-			entityIDs := make([]string, 0, len(e.listMappings))
-			for _, id := range e.listMappings {
-				entityIDs = append(entityIDs, id)
-			}
-
-			// Build reverse mapping: entityID → listName.
-			entityToList := make(map[string]string, len(e.listMappings))
-			for listName, entityID := range e.listMappings {
-				entityToList[entityID] = listName
-			}
-
-			go func() {
-				err := e.haConn.SubscribeChanges(ctx, entityIDs, func(entityID string) {
-					listName, ok := entityToList[entityID]
-					if !ok {
-						return
-					}
-					e.log.Info("WS event triggered reconcile", "entity_id", entityID)
-					if _, err := e.reconciler.ReconcileEntity(ctx, listName, entityID); err != nil {
-						e.log.Error("WS-triggered reconcile failed", "entity_id", entityID, "error", err)
-					}
-				})
-				if err != nil && ctx.Err() == nil {
-					e.log.Error("WS subscription ended unexpectedly", "error", err)
-				}
-			}()
+	triggers := make(chan string, 1)
+	trigger := func(reason string) {
+		select {
+		case triggers <- reason:
+		default:
 		}
 	}
 
-	// Polling loop.
-	ticker := time.NewTicker(e.pollInterval)
-	defer ticker.Stop()
+	// Start WS listener if available.
+	if e.haConn != nil {
+		if err := e.haConn.Connect(ctx); err != nil {
+			e.log.Warn("initial HA WebSocket check failed; subscription reconnect loop will continue", "error", err)
+		}
+		defer func() { _ = e.haConn.Close() }()
 
-	// Run an immediate first pass.
-	if _, err := e.reconcile(ctx); err != nil {
-		e.log.Error("initial reconcile failed", "error", err)
+		entityIDs := make([]string, 0, len(e.listMappings))
+		for _, id := range e.listMappings {
+			entityIDs = append(entityIDs, id)
+		}
+
+		entitySet := make(map[string]struct{}, len(entityIDs))
+		for _, entityID := range entityIDs {
+			entitySet[entityID] = struct{}{}
+		}
+		go func() {
+			err := e.haConn.SubscribeChanges(ctx, entityIDs, func(entityID string) {
+				if _, ok := entitySet[entityID]; !ok {
+					return
+				}
+				e.log.Debug("HA WebSocket change received", "entity_id", entityID)
+				trigger("home_assistant")
+			})
+			if err != nil && ctx.Err() == nil {
+				e.log.Error("WS subscription ended unexpectedly", "error", err)
+			}
+		}()
 	}
+
+	// EventKit changes include writes from this process, Reminders.app, and
+	// iCloud propagation from other devices.
+	if e.remConn != nil {
+		changes, err := e.remConn.WatchChanges(ctx)
+		if err != nil {
+			return fmt.Errorf("subscribing to EventKit changes: %w", err)
+		}
+		go func() {
+			for range changes {
+				e.log.Debug("EventKit reminder change received")
+				trigger("icloud")
+			}
+		}()
+	}
+
+	if e.recoveryInterval <= 0 {
+		e.recoveryInterval = 6 * time.Hour
+	}
+	ticker := time.NewTicker(e.recoveryInterval)
+	defer ticker.Stop()
+	trigger("startup")
 
 	for {
 		select {
@@ -177,8 +202,11 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.log.Info("sync engine shutting down")
 			return ctx.Err()
 		case <-ticker.C:
+			trigger("recovery")
+		case reason := <-triggers:
+			e.log.Info("reconcile triggered", "reason", reason)
 			if _, err := e.reconcile(ctx); err != nil {
-				e.log.Error("reconcile failed", "error", err)
+				e.log.Error("reconcile failed", "reason", reason, "error", err)
 			}
 		}
 	}

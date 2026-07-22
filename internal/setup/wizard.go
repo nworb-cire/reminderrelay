@@ -13,17 +13,19 @@ import (
 
 // Wizard guides the user through first-run configuration and installation.
 type Wizard struct {
-	prompt *Prompter
-	logger *slog.Logger
-	w      io.Writer
+	prompt    *Prompter
+	logger    *slog.Logger
+	w         io.Writer
+	firstSync func(configPath string) error
 }
 
 // NewWizard creates a Wizard wired to the given I/O and logger.
-func NewWizard(r io.Reader, w io.Writer, logger *slog.Logger) *Wizard {
+func NewWizard(r io.Reader, w io.Writer, logger *slog.Logger, firstSync func(configPath string) error) *Wizard {
 	return &Wizard{
-		prompt: NewPrompter(r, w),
-		logger: logger,
-		w:      w,
+		prompt:    NewPrompter(r, w),
+		logger:    logger,
+		w:         w,
+		firstSync: firstSync,
 	}
 }
 
@@ -43,6 +45,9 @@ func (wiz *Wizard) Run(ctx context.Context) error {
 		_, _ = fmt.Fprintf(wiz.w, "  Existing config found at %s\n", cfgPath)
 		if !wiz.prompt.Confirm("Overwrite existing configuration?", false) {
 			_, _ = fmt.Fprintf(wiz.w, "\n  Keeping existing config.\n")
+			if err := wiz.runFirstSync(cfgPath); err != nil {
+				return err
+			}
 			return wiz.offerDaemonInstall(ctx)
 		}
 		_, _ = fmt.Fprintf(wiz.w, "\n")
@@ -69,14 +74,14 @@ func (wiz *Wizard) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Step 3: Poll interval.
-	_, _ = fmt.Fprintf(wiz.w, "Step 3/4 — Poll Interval\n")
+	// Step 3: Recovery interval. Normal synchronization is push-driven.
+	_, _ = fmt.Fprintf(wiz.w, "Step 3/4 — Recovery Interval\n")
 
-	pollStr := wiz.prompt.String("How often to poll Reminders for changes? (10s–5m)", "30s")
-	pollInterval, parseErr := time.ParseDuration(pollStr)
+	recoveryStr := wiz.prompt.String("Safety reconciliation interval? (15m–24h)", "6h")
+	recoveryInterval, parseErr := time.ParseDuration(recoveryStr)
 	if parseErr != nil {
-		pollInterval = 30 * time.Second
-		_, _ = fmt.Fprintf(wiz.w, "  (invalid duration, using default 30s)\n")
+		recoveryInterval = 6 * time.Hour
+		_, _ = fmt.Fprintf(wiz.w, "  (invalid duration, using default 6h)\n")
 	}
 	_, _ = fmt.Fprintf(wiz.w, "\n")
 
@@ -84,18 +89,36 @@ func (wiz *Wizard) Run(ctx context.Context) error {
 	_, _ = fmt.Fprintf(wiz.w, "Step 4/4 — Save Configuration\n")
 
 	cfg := &config.Config{
-		HAURL:        haURL,
-		HAToken:      haToken,
-		PollInterval: pollInterval,
-		ListMappings: listMappings,
+		HAURL:            haURL,
+		HAToken:          haToken,
+		RecoveryInterval: recoveryInterval,
+		ListMappings:     listMappings,
 	}
 
 	if err := cfg.Write(cfgPath); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	_, _ = fmt.Fprintf(wiz.w, "  ✓ Config written to %s\n\n", cfgPath)
+	if err := wiz.runFirstSync(cfgPath); err != nil {
+		return err
+	}
 
 	return wiz.offerDaemonInstall(ctx)
+}
+
+// runFirstSync performs the confirmation-gated bootstrap while setup still
+// owns an interactive terminal. A launchd process has no usable stdin, so it
+// must never be responsible for deciding the initial cross-system linkage.
+func (wiz *Wizard) runFirstSync(cfgPath string) error {
+	if wiz.firstSync == nil {
+		return nil
+	}
+	_, _ = fmt.Fprintln(wiz.w, "  Reviewing the initial iCloud-authoritative sync before daemon installation...")
+	if err := wiz.firstSync(cfgPath); err != nil {
+		return fmt.Errorf("initial sync: %w", err)
+	}
+	_, _ = fmt.Fprintln(wiz.w, "  ✓ Initial sync complete")
+	return nil
 }
 
 // buildListMappings discovers Reminders lists and HA entities, then lets the

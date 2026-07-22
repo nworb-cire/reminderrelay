@@ -3,6 +3,7 @@ package sync
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,10 @@ import (
 	"github.com/njoerd114/reminderrelay/internal/model"
 	"github.com/njoerd114/reminderrelay/internal/state"
 )
+
+// ErrBootstrapCancelled prevents the daemon from reconciling against an empty
+// state database after the user declines the first-run write summary.
+var ErrBootstrapCancelled = errors.New("first-run bootstrap was not confirmed")
 
 // Bootstrap performs the first-run linkage of existing items between Apple
 // Reminders and Home Assistant. It matches items by title, prints a summary,
@@ -106,7 +111,7 @@ func (b *Bootstrap) Run(ctx context.Context, listMappings map[string]string) (bo
 	// Ask for confirmation.
 	if !b.confirm() {
 		b.log.Info("bootstrap cancelled by user")
-		return false, nil
+		return false, ErrBootstrapCancelled
 	}
 
 	// Execute: write matched pairs to state DB, push unmatched Reminders → HA.
@@ -118,36 +123,53 @@ func (b *Bootstrap) Run(ctx context.Context, listMappings map[string]string) (bo
 	return true, nil
 }
 
-// matchByTitle matches Reminders items to HA items by exact title (case-insensitive).
+// matchByTitle first honors an existing canonical iCloud UID embedded in HA,
+// then pairs remaining items by title (case-insensitive). Each item can be
+// consumed only once, which makes duplicate titles safe during bootstrap.
 func matchByTitle(listName, entityID string, remItems []*model.Item, haItems []model.Item) matchResult {
 	result := matchResult{
 		listName: listName,
 		entityID: entityID,
 	}
 
-	// Build HA title → item index.
-	haByTitle := make(map[string]*model.Item, len(haItems))
+	// Build HA canonical UID/title indexes.
+	haByCanonicalUID := make(map[string]int, len(haItems))
+	haByTitle := make(map[string][]int, len(haItems))
 	for i := range haItems {
 		haItems[i].ListName = listName
+		if haItems[i].CanonicalUID != "" {
+			haByCanonicalUID[haItems[i].CanonicalUID] = i
+		}
 		key := strings.ToLower(haItems[i].Title)
-		haByTitle[key] = &haItems[i]
+		haByTitle[key] = append(haByTitle[key], i)
 	}
 
-	matchedHATitles := make(map[string]bool)
+	usedHA := make(map[int]bool, len(haItems))
 
 	for _, rem := range remItems {
-		key := strings.ToLower(rem.Title)
-		if ha, ok := haByTitle[key]; ok {
-			result.matched = append(result.matched, matchedPair{rem: rem, ha: ha})
-			matchedHATitles[key] = true
-		} else {
+		if idx, ok := haByCanonicalUID[rem.UID]; ok && !usedHA[idx] {
+			result.matched = append(result.matched, matchedPair{rem: rem, ha: &haItems[idx]})
+			usedHA[idx] = true
+			continue
+		}
+
+		matched := false
+		for _, idx := range haByTitle[strings.ToLower(rem.Title)] {
+			if usedHA[idx] {
+				continue
+			}
+			result.matched = append(result.matched, matchedPair{rem: rem, ha: &haItems[idx]})
+			usedHA[idx] = true
+			matched = true
+			break
+		}
+		if !matched {
 			result.remOnly = append(result.remOnly, rem)
 		}
 	}
 
 	for i := range haItems {
-		key := strings.ToLower(haItems[i].Title)
-		if !matchedHATitles[key] {
+		if !usedHA[i] {
 			result.haOnly = append(result.haOnly, &haItems[i])
 		}
 	}
@@ -212,6 +234,11 @@ func (b *Bootstrap) execute(ctx context.Context, results []matchResult) error {
 	for _, r := range results {
 		// Write matched pairs.
 		for _, m := range r.matched {
+			// Matching is identity discovery only. iCloud content is canonical,
+			// so refresh the HA projection before recording the baseline hash.
+			if err := b.ha.UpdateItem(ctx, r.entityID, m.ha.UID, m.rem); err != nil {
+				return fmt.Errorf("refreshing matched item %q from iCloud: %w", m.rem.Title, err)
+			}
 			si := &state.Item{
 				RemindersUID:      m.rem.UID,
 				HAUID:             m.ha.UID,
@@ -241,9 +268,17 @@ func (b *Bootstrap) execute(ctx context.Context, results []matchResult) error {
 			}
 			var haUID string
 			for _, h := range haItems {
-				if h.Title == item.Title {
+				if h.CanonicalUID == item.UID {
 					haUID = h.UID
 					break
+				}
+			}
+			if haUID == "" {
+				for _, h := range haItems {
+					if h.Title == item.Title {
+						haUID = h.UID
+						break
+					}
 				}
 			}
 
@@ -264,19 +299,23 @@ func (b *Bootstrap) execute(ctx context.Context, results []matchResult) error {
 
 		// Push HA-only items to Reminders.
 		for _, item := range r.haOnly {
-			uid, err := b.rem.Create(ctx, item)
+			canonical, err := b.rem.Create(ctx, item)
 			if err != nil {
 				return fmt.Errorf("pushing %q to Reminders: %w", item.Title, err)
 			}
+			if err := b.ha.UpdateItem(ctx, r.entityID, item.UID, canonical); err != nil {
+				return fmt.Errorf("refreshing %q from iCloud: %w", item.Title, err)
+			}
 
 			si := &state.Item{
-				RemindersUID: uid,
-				HAUID:        item.UID,
-				ListName:     r.listName,
-				Title:        item.Title,
-				LastSyncHash: item.ContentHash(),
-				HAModified:   item.ModifiedAt,
-				LastSyncedAt: now,
+				RemindersUID:      canonical.UID,
+				HAUID:             item.UID,
+				ListName:          r.listName,
+				Title:             canonical.Title,
+				LastSyncHash:      canonical.ContentHash(),
+				RemindersModified: canonical.ModifiedAt,
+				HAModified:        item.ModifiedAt,
+				LastSyncedAt:      now,
 			}
 			if err := b.store.UpsertItem(ctx, si); err != nil {
 				return fmt.Errorf("writing state for %q: %w", item.Title, err)
