@@ -27,6 +27,17 @@ char *rr_prepare_application(void) {
             return strdup("Reminders access is denied");
         }
 
+        NSAlert *consent = [[NSAlert alloc] init];
+        consent.messageText = @"Allow ReminderRelay to sync Reminders";
+        consent.informativeText =
+            @"ReminderRelay needs full Reminders access to keep iCloud as the source of truth and synchronize your configured lists with Home Assistant.";
+        [consent addButtonWithTitle:@"Continue"];
+        [consent addButtonWithTitle:@"Quit"];
+        if ([consent runModal] != NSAlertFirstButtonReturn) {
+            [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
+            return strdup("Reminders permission request cancelled");
+        }
+
         // EventKit's consent request is asynchronous. Keep the main AppKit run
         // loop alive while macOS presents the sheet; blocking this thread on a
         // semaphore causes a background-style denial before any TCC record is
@@ -50,8 +61,10 @@ char *rr_prepare_application(void) {
                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
             }
         }
-        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
-        if (granted) return NULL;
+        if (granted) {
+            [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
+            return NULL;
+        }
         EKAuthorizationStatus finalStatus =
             [EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder];
         NSString *message = [NSString stringWithFormat:
@@ -62,6 +75,12 @@ char *rr_prepare_application(void) {
             application.active,
             accessError ? @", error=" : @"",
             accessError.localizedDescription ?: @""];
+        NSAlert *failure = [[NSAlert alloc] init];
+        failure.alertStyle = NSAlertStyleWarning;
+        failure.messageText = @"ReminderRelay could not access Reminders";
+        failure.informativeText = @"Open System Settings → Privacy & Security → Reminders and enable ReminderRelay, then open ReminderRelay again.";
+        [failure runModal];
+        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         return strdup(message.UTF8String);
     }
 }
