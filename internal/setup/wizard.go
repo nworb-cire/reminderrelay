@@ -56,8 +56,17 @@ func (wiz *Wizard) Run(ctx context.Context) error {
 	// Step 1: Home Assistant connection.
 	_, _ = fmt.Fprintf(wiz.w, "Step 1/4 — Home Assistant Connection\n")
 
-	haURL := wiz.prompt.String("HA URL", "http://homeassistant.local:8123")
-	haToken := wiz.prompt.Secret("Access token")
+	haURLDefault := firstEnvironmentValue("REMINDERRELAY_HA_URL", "HASS_URL")
+	if haURLDefault == "" {
+		haURLDefault = "http://homeassistant.local:8123"
+	}
+	haURL := wiz.prompt.String("HA URL", haURLDefault)
+	haToken := firstEnvironmentValue("REMINDERRELAY_HA_TOKEN", "HOME_ASSISTANT_TOKEN", "HASS_TOKEN")
+	if haToken != "" {
+		_, _ = fmt.Fprintln(wiz.w, "  Access token: using token from environment")
+	} else {
+		haToken = wiz.prompt.Secret("Access token")
+	}
 
 	_, _ = fmt.Fprintf(wiz.w, "  Connecting to Home Assistant...")
 	if err := PingHA(ctx, haURL, haToken); err != nil {
@@ -104,6 +113,15 @@ func (wiz *Wizard) Run(ctx context.Context) error {
 	}
 
 	return wiz.offerDaemonInstall(ctx)
+}
+
+func firstEnvironmentValue(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // runFirstSync performs the confirmation-gated bootstrap while setup still

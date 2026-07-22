@@ -54,6 +54,11 @@ just build
 reminderrelay setup
 ```
 
+For unattended credential entry, the wizard accepts `REMINDERRELAY_HA_URL`
+(or `HASS_URL`) and `REMINDERRELAY_HA_TOKEN` (or
+`HOME_ASSISTANT_TOKEN`/`HASS_TOKEN`) from the environment. The generated
+configuration persists the resolved values for launchd.
+
 The wizard will walk you through:
 1. Connecting to your Home Assistant instance
 2. Discovering Reminders lists and HA todo entities
