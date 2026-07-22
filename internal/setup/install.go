@@ -17,6 +17,9 @@ var plistTemplateStr string
 //go:embed app_info.plist
 var appInfoPlist []byte
 
+//go:embed entitlements.plist
+var entitlementsPlist []byte
+
 const (
 	// BinaryName is the name of the installed binary.
 	BinaryName = "reminderrelay"
@@ -87,13 +90,17 @@ func InstallBinary() error {
 	if err := copyFile(self, dest, 0o755); err != nil {
 		return err
 	}
+	entitlementsPath := filepath.Join(AppInstallPath(), "Contents", "entitlements.plist")
+	if err := os.WriteFile(entitlementsPath, entitlementsPlist, 0o644); err != nil {
+		return fmt.Errorf("writing application entitlements: %w", err)
+	}
 
 	identity := os.Getenv("REMINDERRELAY_CODESIGN_IDENTITY")
 	if identity == "" {
 		identity = "-"
 	}
 	//nolint:gosec // arguments are passed directly, without a shell
-	sign := exec.Command("codesign", "--force", "--deep", "--options", "runtime", "--timestamp=none", "--sign", identity, AppInstallPath())
+	sign := exec.Command("codesign", "--force", "--deep", "--options", "runtime", "--timestamp=none", "--sign", identity, "--entitlements", entitlementsPath, AppInstallPath())
 	if output, err := sign.CombinedOutput(); err != nil {
 		return fmt.Errorf("signing application bundle: %s: %w", strings.TrimSpace(string(output)), err)
 	}

@@ -46,6 +46,7 @@ jobs:
             ./cmd/reminderrelay
           codesign --force --sign - \
             --identifier com.github.njoerd114.reminderrelay \
+            --entitlements internal/setup/entitlements.plist \
             "reminderrelay-darwin-${{ matrix.goarch }}"
 
       - name: Compute SHA256 checksum

@@ -16,11 +16,12 @@ void rr_assignment_free(char *value) {
 char *rr_prepare_application(void) {
     @autoreleasepool {
         NSApplication *application = [NSApplication sharedApplication];
-        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
-        [application finishLaunching];
-
         EKAuthorizationStatus status =
             [EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder];
+        [application setActivationPolicy:status == EKAuthorizationStatusNotDetermined
+            ? NSApplicationActivationPolicyRegular
+            : NSApplicationActivationPolicyAccessory];
+        [application finishLaunching];
         if (status == EKAuthorizationStatusFullAccess) return NULL;
         if (status == EKAuthorizationStatusDenied || status == EKAuthorizationStatusRestricted) {
             return strdup("Reminders access is denied");
@@ -49,10 +50,18 @@ char *rr_prepare_application(void) {
                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
             }
         }
+        [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
         if (granted) return NULL;
-        NSString *message = accessError
-            ? [NSString stringWithFormat:@"Reminders access denied: %@", accessError.localizedDescription]
-            : @"Reminders access denied";
+        EKAuthorizationStatus finalStatus =
+            [EKEventStore authorizationStatusForEntityType:EKEntityTypeReminder];
+        NSString *message = [NSString stringWithFormat:
+            @"Reminders access denied (status=%ld, bundle=%@, path=%@, active=%d%@%@)",
+            (long)finalStatus,
+            [NSBundle mainBundle].bundleIdentifier ?: @"<none>",
+            [NSBundle mainBundle].bundlePath ?: @"<none>",
+            application.active,
+            accessError ? @", error=" : @"",
+            accessError.localizedDescription ?: @""];
         return strdup(message.UTF8String);
     }
 }

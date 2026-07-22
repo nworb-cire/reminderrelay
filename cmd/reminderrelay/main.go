@@ -58,8 +58,12 @@ func main() {
 
 // run dispatches to the appropriate subcommand or falls back to legacy flags.
 func run() error {
-	// No arguments → smart usage.
+	// Finder launches application bundles without arguments. In that context,
+	// run the daemon so the first user-opened launch can own the TCC prompt.
 	if len(os.Args) < 2 {
+		if executable, err := os.Executable(); err == nil && strings.Contains(executable, ".app/Contents/MacOS/") {
+			return runSync(nil, true)
+		}
 		return printUsage()
 	}
 
