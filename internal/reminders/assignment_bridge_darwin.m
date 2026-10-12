@@ -48,13 +48,17 @@ char *rr_prepare_application(void) {
         __block BOOL granted = NO;
         __block NSError *accessError = nil;
         [store requestFullAccessToRemindersWithCompletion:^(BOOL didGrant, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
+            // This callback may run off-thread. Do not enqueue its result onto
+            // the main queue: consent is being requested inside a nested main
+            // run loop, which can defer that queue until this function returns.
+            @synchronized (store) {
                 granted = didGrant;
                 accessError = error;
                 finished = YES;
-            });
+            }
         }];
-        while (!finished) {
+        while (YES) {
+            @synchronized (store) { if (finished) break; }
             @autoreleasepool {
                 [[NSRunLoop currentRunLoop]
                     runMode:NSDefaultRunLoopMode
