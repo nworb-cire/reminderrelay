@@ -10,5 +10,6 @@ rr_assignment_result_t rr_assignment_get(const char *reminder_id);
 rr_assignment_result_t rr_assignment_set(const char *reminder_id, const char *assignment_json);
 void rr_assignment_free(char *value);
 char *rr_prepare_application(void);
+void rr_run_loop_step(void);
 
 #endif

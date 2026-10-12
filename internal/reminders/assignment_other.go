@@ -17,3 +17,5 @@ func prepareNativeApplication() error { return nil }
 func writeAssignment(string, *model.Assignment) (*model.Assignment, error) {
 	return nil, fmt.Errorf("reminder assignments require macOS with cgo")
 }
+
+func RunWithNativeEvents(run func() error) error { return run() }

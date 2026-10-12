@@ -287,3 +287,10 @@ deployment/               launchd plist, install/uninstall scripts
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Native change notifications
+
+The daemon keeps the macOS main run loop active while the serialized sync engine
+runs on a worker goroutine. EventKit requires this to deliver changes originating
+in Reminders.app or arriving from iCloud. The recovery timer remains a fallback,
+rather than the only way native edits reach Home Assistant.

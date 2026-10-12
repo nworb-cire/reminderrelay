@@ -390,7 +390,11 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 			if persistence, ok := r.store.(completionStore); ok {
 				due := "once"
 				if haItem.DueDate != nil {
-					due = haItem.DueDate.Format("2006-01-02")
+					if haItem.DueDate.Hour() == 0 && haItem.DueDate.Minute() == 0 && haItem.DueDate.Second() == 0 && haItem.DueDate.Nanosecond() == 0 {
+						due = haItem.DueDate.Format("2006-01-02")
+					} else {
+						due = haItem.DueDate.UTC().Format(time.RFC3339Nano)
+					}
 				}
 				if err := persistence.SaveCompletionLink(ctx, state.CompletionLink{ListName: si.ListName, OriginHAUID: haItem.UID, OriginDue: due, CompletedHAUID: linked.HAUID, CompletedRemindersUID: archived.UID, Assignment: archived.Assignment}); err != nil {
 					return err

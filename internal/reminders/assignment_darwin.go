@@ -67,3 +67,18 @@ func writeAssignment(uid string, assignment *model.Assignment) (*model.Assignmen
 	defer C.free(unsafe.Pointer(cPayload))
 	return assignmentResult(C.rr_assignment_set(cUID, cPayload))
 }
+
+// RunWithNativeEvents runs the engine while keeping the locked process main
+// thread available to AppKit and EventKit notifications.
+func RunWithNativeEvents(run func() error) error {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	for {
+		select {
+		case err := <-result:
+			return err
+		default:
+			C.rr_run_loop_step()
+		}
+	}
+}

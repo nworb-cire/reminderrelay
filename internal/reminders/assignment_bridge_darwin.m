@@ -320,3 +320,12 @@ rr_assignment_result_t rr_assignment_set(const char *reminder_id, const char *as
         return rr_json(assignment_dictionary(find_reminder([NSString stringWithUTF8String:reminder_id])) ?: @{});
     }
 }
+
+// EventKit delivers store-change notifications through the main run loop.
+// Keep it alive while the serialized Go reconciliation engine runs off-thread.
+void rr_run_loop_step(void) {
+    @autoreleasepool {
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+    }
+}

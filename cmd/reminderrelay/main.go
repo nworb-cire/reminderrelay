@@ -419,7 +419,7 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 
 	// daemon mode
 	logger.Info("daemon starting", "recovery_interval", cfg.RecoveryInterval)
-	if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := reminders.RunWithNativeEvents(func() error { return engine.Run(ctx) }); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("sync engine: %w", err)
 	}
 	logger.Info("shutdown complete")
