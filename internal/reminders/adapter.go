@@ -48,7 +48,12 @@ func NewAdapter(logger *slog.Logger) (*Adapter, error) {
 			return nil, err
 		}
 	}
-	c, err := ekreminders.New()
+	var c *ekreminders.Client
+	err := RunWithNativeEvents(func() error {
+		var accessErr error
+		c, accessErr = ekreminders.New()
+		return accessErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("initialising reminders client: %w", err)
 	}

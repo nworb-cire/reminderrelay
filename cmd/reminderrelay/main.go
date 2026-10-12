@@ -393,7 +393,7 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 	// --- First-run bootstrap -------------------------------------------------
 
 	bootstrap := syncp.NewBootstrap(remAdapter, haAdapter, store, logger, os.Stdin, os.Stdout)
-	if _, err := bootstrap.Run(ctx, cfg.ListMappings); err != nil {
+	if err := reminders.RunWithNativeEvents(func() error { _, err := bootstrap.Run(ctx, cfg.ListMappings); return err }); err != nil {
 		return fmt.Errorf("first-run bootstrap: %w", err)
 	}
 
@@ -406,7 +406,8 @@ func startSync(cfgPath string, verbose, daemon bool) error {
 
 	if !daemon {
 		logger.Info("running single sync pass")
-		stats, err := engine.RunOnce(ctx)
+		var stats syncp.Stats
+		err := reminders.RunWithNativeEvents(func() error { var runErr error; stats, runErr = engine.RunOnce(ctx); return runErr })
 		logger.Info("sync complete",
 			"created", stats.Created,
 			"updated", stats.Updated,
