@@ -186,6 +186,18 @@ func (a *Adapter) Update(ctx context.Context, uid string, item *model.Item) (*mo
 
 	a.log.Debug("updating reminder", "uid", uid, "title", item.Title)
 
+	// Snapshot native identities before a recurring completion. Apple may advance
+	// the master in place and create a new completed record with a different ID.
+	known := map[string]bool{}
+	if item.Completed && len(item.RecurrenceRules) > 0 {
+		before, err := a.client.Reminders(ekreminders.WithList(item.ListName))
+		if err != nil {
+			return nil, fmt.Errorf("snapshotting recurring completion: %w", err)
+		}
+		for _, existing := range before {
+			known[existing.ID] = true
+		}
+	}
 	// Fetch current state to decide if completion status changed.
 	input := itemToUpdateInput(item)
 	updated, err := a.client.UpdateReminder(uid, input)
@@ -212,6 +224,17 @@ func (a *Adapter) Update(ctx context.Context, uid string, item *model.Item) (*mo
 	}
 	canonical := reminderToItem(updated, item.ListName)
 	canonical.Assignment = assignment
+	if item.Completed && !canonical.Completed && len(known) > 0 {
+		after, err := a.client.Reminders(ekreminders.WithList(item.ListName))
+		if err != nil {
+			return nil, fmt.Errorf("resolving completed occurrence: %w", err)
+		}
+		completedUID, err := resolveArchivedCompletion(known, after, item)
+		if err != nil {
+			return nil, err
+		}
+		canonical.CompletedOccurrenceUID = completedUID
+	}
 	return canonical, nil
 }
 
@@ -260,4 +283,26 @@ func (a *Adapter) Delete(ctx context.Context, uid string) error {
 // must refetch canonical state.
 func (a *Adapter) WatchChanges(ctx context.Context) (<-chan struct{}, error) {
 	return a.client.WatchChanges(ctx)
+}
+
+// Resolve only newly created native identities from this completion transaction.
+// Duplicate candidates are refused; an existing reminder is never selected by title.
+func resolveArchivedCompletion(known map[string]bool, after []ekreminders.Reminder, item *model.Item) (string, error) {
+	var matches []string
+	for _, archived := range after {
+		if known[archived.ID] || !archived.Completed || archived.Title != item.Title {
+			continue
+		}
+		if (archived.DueDate == nil) != (item.DueDate == nil) {
+			continue
+		}
+		if archived.DueDate != nil && archived.DueDate.Format("2006-01-02") != item.DueDate.Format("2006-01-02") {
+			continue
+		}
+		matches = append(matches, archived.ID)
+	}
+	if len(matches) != 1 {
+		return "", fmt.Errorf("cannot safely identify archived recurring completion: %d new matches", len(matches))
+	}
+	return matches[0], nil
 }

@@ -192,7 +192,11 @@ After each reconciliation, ReminderRelay fires a generic
 
 Each task in `assignees` and `tasks_by_assignee` includes its canonical iCloud
 `uid`, linked `ha_uid`, and projected `frequency`. Consumers should update the
-HA item by `ha_uid`, rather than its title.
+HA item by `ha_uid`, rather than its title. For recurring completions,
+`assignees[].completion_links` maps the master HA UID and original due date to
+Apple's separately archived completed occurrence. This linkage is stored in
+SQLite, survives restarts, and lets a consumer undo the completed occurrence
+without altering the next scheduled reminder.
 
 Trigger-based HA template sensors can turn this event into any household- or
 workflow-specific entities. The public relay contains no assumptions about

@@ -108,6 +108,9 @@ type Item struct {
 	// Completed is true when the task has been marked as done.
 	Completed bool
 
+	// Set only by an explicit recurring completion whose master advances.
+	CompletedOccurrenceUID string
+
 	// ModifiedAt is the last modification time reported by the source adapter.
 	// Retained for diagnostics and state history; iCloud wins concurrent edits.
 	ModifiedAt time.Time
@@ -228,10 +231,11 @@ type ListSummary struct {
 // AssigneeSummary retains both stable identity and display metadata. A nil
 // Assignment represents reminders that are currently unassigned.
 type AssigneeSummary struct {
-	Assignment *Assignment   `json:"assignment,omitempty"`
-	Name       string        `json:"name"`
-	Remaining  int           `json:"remaining"`
-	Tasks      []SummaryTask `json:"tasks"`
+	Assignment      *Assignment      `json:"assignment,omitempty"`
+	Name            string           `json:"name"`
+	Remaining       int              `json:"remaining"`
+	Tasks           []SummaryTask    `json:"tasks"`
+	CompletionLinks []CompletionLink `json:"completion_links,omitempty"`
 }
 
 // SummaryTask is the compact task representation exposed as a summary
@@ -283,4 +287,11 @@ func DecodePriorityPrefix(description string) (Priority, string) {
 	default:
 		return PriorityNone, description
 	}
+}
+
+// CompletionLink connects a master occurrence to Apple's archived task.
+type CompletionLink struct {
+	OriginHAUID    string `json:"origin_ha_uid"`
+	OriginDue      string `json:"origin_due"`
+	CompletedHAUID string `json:"completed_ha_uid"`
 }

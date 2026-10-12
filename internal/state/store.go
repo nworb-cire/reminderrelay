@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS sync_items (
     last_synced_at     TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS completion_links (
+ list_name TEXT NOT NULL, origin_ha_uid TEXT NOT NULL, origin_due TEXT NOT NULL,
+ completed_ha_uid TEXT NOT NULL, completed_reminders_uid TEXT NOT NULL,
+ assignment TEXT NOT NULL DEFAULT 'null', PRIMARY KEY(origin_ha_uid,origin_due)
+);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_uid ON sync_items (reminders_uid) WHERE reminders_uid != '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ha_uid         ON sync_items (ha_uid)         WHERE ha_uid != '';
 CREATE INDEX        IF NOT EXISTS idx_list_name      ON sync_items (list_name);

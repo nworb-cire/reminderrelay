@@ -359,6 +359,44 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 		if err != nil {
 			return fmt.Errorf("updating %q in Reminders: %w", haItem.Title, err)
 		}
+		if canonical.CompletedOccurrenceUID != "" {
+			nativeItems, err := r.rem.FetchAll(ctx, []string{si.ListName})
+			if err != nil {
+				return err
+			}
+			var archived *model.Item
+			for _, candidate := range nativeItems {
+				if candidate.UID == canonical.CompletedOccurrenceUID {
+					archived = candidate
+					break
+				}
+			}
+			if archived == nil {
+				return fmt.Errorf("archived recurring occurrence not found")
+			}
+			linked, err := r.store.GetItemByRemindersUID(ctx, archived.UID)
+			if err != nil {
+				return err
+			}
+			if linked == nil {
+				if err := r.createInHA(ctx, archived, entityID); err != nil {
+					return err
+				}
+				linked, err = r.store.GetItemByRemindersUID(ctx, archived.UID)
+				if err != nil {
+					return err
+				}
+			}
+			if persistence, ok := r.store.(completionStore); ok {
+				due := "once"
+				if haItem.DueDate != nil {
+					due = haItem.DueDate.Format("2006-01-02")
+				}
+				if err := persistence.SaveCompletionLink(ctx, state.CompletionLink{ListName: si.ListName, OriginHAUID: haItem.UID, OriginDue: due, CompletedHAUID: linked.HAUID, CompletedRemindersUID: archived.UID, Assignment: archived.Assignment}); err != nil {
+					return err
+				}
+			}
+		}
 		// Echo the committed iCloud representation back to HA. This is important
 		// for recurrence (completion may materialize another occurrence) and for
 		// metadata normalized by ReminderKit.
@@ -511,6 +549,36 @@ func (r *Reconciler) publishListSummary(ctx context.Context, listName, entityID 
 		group.Remaining++
 		group.Tasks = append(group.Tasks, task)
 	}
+	if persistence, ok := r.store.(completionStore); ok {
+		links, err := persistence.GetCompletionLinksForList(ctx, listName)
+		if err != nil {
+			return err
+		}
+		nativeByUID := map[string]*model.Item{}
+		for _, item := range items {
+			nativeByUID[item.UID] = item
+		}
+		for _, link := range links {
+			if nativeByUID[link.CompletedRemindersUID] == nil {
+				continue
+			}
+			key := "__unassigned__"
+			name := "Unassigned"
+			if link.Assignment != nil {
+				key = link.Assignment.ID
+				name = link.Assignment.Name
+				if key == "" {
+					key = name
+				}
+			}
+			group := groups[key]
+			if group == nil {
+				group = &model.AssigneeSummary{Assignment: link.Assignment, Name: name}
+				groups[key] = group
+			}
+			group.CompletionLinks = append(group.CompletionLinks, model.CompletionLink{OriginHAUID: link.OriginHAUID, OriginDue: link.OriginDue, CompletedHAUID: link.CompletedHAUID})
+		}
+	}
 	for _, group := range groups {
 		summary.Assignees = append(summary.Assignees, *group)
 	}
@@ -518,4 +586,9 @@ func (r *Reconciler) publishListSummary(ctx context.Context, listName, entityID 
 		return strings.ToLower(summary.Assignees[i].Name) < strings.ToLower(summary.Assignees[j].Name)
 	})
 	return r.ha.PublishListSummary(ctx, summary)
+}
+
+type completionStore interface {
+	SaveCompletionLink(context.Context, state.CompletionLink) error
+	GetCompletionLinksForList(context.Context, string) ([]state.CompletionLink, error)
 }
