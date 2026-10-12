@@ -21,7 +21,7 @@ func TestHADescriptionUsesCompactYAMLProjection(t *testing.T) {
 	}
 
 	description := EncodeHADescription(item)
-	want := "Assignee: Alex\nTags:\n  - outside\n  - weekly\nPriority: High\nNotes: Bring the blue bin"
+	want := "Assignee: Alex\nTags:\n  - outside\n  - weekly\nPriority: High\nNotes: Bring the blue bin\nFrequency: weekly"
 	if description != want {
 		t.Fatalf("encoded description = %q", description)
 	}
@@ -32,7 +32,7 @@ func TestHADescriptionUsesCompactYAMLProjection(t *testing.T) {
 	if priority != PriorityHigh || notes != item.Description {
 		t.Fatalf("decoded priority/notes = %v/%q", priority, notes)
 	}
-	if canonicalUID != "" || len(tags) != 2 || assignment == nil || assignment.Name != "Alex" || len(recurrence) != 0 {
+	if canonicalUID != "" || len(tags) != 2 || assignment == nil || assignment.Name != "Alex" || len(recurrence) != 1 || recurrence[0].Frequency != eventkit.FrequencyWeekly {
 		t.Fatalf("decoded YAML metadata = uid:%q tags:%#v assignment:%#v recurrence:%#v", canonicalUID, tags, assignment, recurrence)
 	}
 }

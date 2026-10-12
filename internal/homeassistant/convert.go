@@ -55,6 +55,15 @@ func haItemToModelItem(h haTodoItem) model.Item {
 		Completed:       h.Status == statusCompleted,
 	}
 
+	fields := model.HAProjectionFields(h.Description)
+	item.AssignmentEditable = fields["Assignee"]
+	item.TagsEditable = fields["Tags"]
+	frequency := model.HAProjectionFrequency(h.Description)
+	item.FrequencyEditable = fields["Frequency"] && (frequency == "once" || frequency == "daily" || frequency == "weekly")
+	if fields["Frequency"] {
+		item.ProjectedFrequency = frequency
+	}
+
 	if h.Due != "" {
 		if t, err := parseDue(h.Due); err == nil {
 			item.DueDate = &t

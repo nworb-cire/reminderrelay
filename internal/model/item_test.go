@@ -127,7 +127,7 @@ func TestContentHash_NilDueDate(t *testing.T) {
 	}
 }
 
-func TestProjectionHashTracksVisibleYAMLMetadataButNotRecurrence(t *testing.T) {
+func TestProjectionHashTracksMetadataAndFrequencyButPreservesNativeDetails(t *testing.T) {
 	item := &Item{Title: "Task", Assignment: &Assignment{Name: "Alex"}, Tags: []string{"outside"}}
 	before := item.ProjectionHash()
 	item.Assignment = &Assignment{Name: "Jordan"}
@@ -137,8 +137,13 @@ func TestProjectionHashTracksVisibleYAMLMetadataButNotRecurrence(t *testing.T) {
 	}
 	beforeRecurrence := item.ProjectionHash()
 	item.RecurrenceRules = []eventkit.RecurrenceRule{eventkit.Daily(1)}
+	if item.ProjectionHash() == beforeRecurrence {
+		t.Fatal("ProjectionHash did not change for projected frequency")
+	}
+	beforeRecurrence = item.ProjectionHash()
+	item.RecurrenceRules[0].End = &eventkit.RecurrenceEnd{OccurrenceCount: 10}
 	if item.ProjectionHash() != beforeRecurrence {
-		t.Fatal("ProjectionHash changed for hidden recurrence metadata")
+		t.Fatal("Native recurrence details should remain outside the projection hash")
 	}
 }
 

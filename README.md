@@ -160,7 +160,15 @@ Tags:
   - Daily
 Priority: High
 Notes: Empty and reload the dishwasher
+Frequency: daily
 ```
+
+Daily and weekly recurrence are exposed as `Frequency: daily` or `weekly`;
+`Frequency: once` explicitly removes recurrence. Other recurrence patterns show
+`Frequency: custom` and stay managed in iCloud. Editing a title, notes, or
+completion does not discard the native recurrence constraints. Explicit
+`Assignee` and `Tags` edits are written back; omitting these fields preserves
+the canonical values. An empty `Assignee: ""` explicitly unassigns a reminder.
 
 Empty fields are omitted. Internal identifiers and native recurrence details
 remain in iCloud and ReminderRelay's linkage database. HA edits are merged onto
@@ -181,6 +189,10 @@ After each reconciliation, ReminderRelay fires a generic
   "updated_at": "2026-07-22T01:00:00Z"
 }
 ```
+
+Each task in `assignees` and `tasks_by_assignee` includes its canonical iCloud
+`uid`, linked `ha_uid`, and projected `frequency`. Consumers should update the
+HA item by `ha_uid`, rather than its title.
 
 Trigger-based HA template sensors can turn this event into any household- or
 workflow-specific entities. The public relay contains no assumptions about

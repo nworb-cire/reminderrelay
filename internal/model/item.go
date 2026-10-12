@@ -99,6 +99,12 @@ type Item struct {
 	// them when HA-supported fields are edited.
 	RecurrenceRules []eventkit.RecurrenceRule
 
+	// Explicit HA YAML edits; missing metadata must not clear native fields.
+	AssignmentEditable bool
+	TagsEditable       bool
+	FrequencyEditable  bool
+	ProjectedFrequency string
+
 	// Completed is true when the task has been marked as done.
 	Completed bool
 
@@ -178,6 +184,8 @@ func (i *Item) ProjectionHash() string {
 	h.Write([]byte("|"))
 	h.Write([]byte(strings.ToLower(i.AssigneeLabel())))
 	h.Write([]byte("|"))
+	h.Write([]byte(i.FrequencyLabel()))
+	h.Write([]byte("|"))
 	_, _ = fmt.Fprintf(h, "%t", i.Completed)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -231,6 +239,8 @@ type AssigneeSummary struct {
 // without putting transport metadata in its visible description.
 type SummaryTask struct {
 	UID        string      `json:"uid"`
+	HAUID      string      `json:"ha_uid,omitempty"`
+	Frequency  string      `json:"frequency"`
 	Title      string      `json:"title"`
 	DueAt      *time.Time  `json:"due_at,omitempty"`
 	Tags       []string    `json:"tags,omitempty"`

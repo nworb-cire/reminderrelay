@@ -421,8 +421,9 @@ func (r *Reconciler) createInReminders(ctx context.Context, haItem *model.Item, 
 }
 
 // mergeHAProjection applies only fields Home Assistant represents onto the
-// latest canonical iCloud item. Tags, assignment, recurrence, and all other
-// native metadata remain untouched.
+// latest canonical iCloud item. Typed YAML fields can explicitly change
+// assignment, tags, and simple recurrence; omitted fields and unchanged
+// recurrence labels preserve the full native metadata.
 func mergeHAProjection(canonical, projection *model.Item) *model.Item {
 	merged := *canonical
 	merged.Title = projection.Title
@@ -430,6 +431,15 @@ func mergeHAProjection(canonical, projection *model.Item) *model.Item {
 	merged.DueDate = projection.DueDate
 	merged.Priority = projection.Priority
 	merged.Completed = projection.Completed
+	if projection.AssignmentEditable && !strings.EqualFold(canonical.AssigneeLabel(), projection.AssigneeLabel()) {
+		merged.Assignment = projection.Assignment
+	}
+	if projection.TagsEditable {
+		merged.Tags = append([]string(nil), projection.Tags...)
+	}
+	if projection.FrequencyEditable && projection.FrequencyLabel() != canonical.FrequencyLabel() {
+		merged.RecurrenceRules = append(merged.RecurrenceRules[:0:0], projection.RecurrenceRules...)
+	}
 	return &merged
 }
 
@@ -470,7 +480,17 @@ func (r *Reconciler) publishListSummary(ctx context.Context, listName, entityID 
 				assigneeKey = item.Assignment.Name
 			}
 		}
+		link, err := r.store.GetItemByRemindersUID(ctx, item.UID)
+		if err != nil {
+			return fmt.Errorf("looking up summary linkage: %w", err)
+		}
+		haUID := ""
+		if link != nil {
+			haUID = link.HAUID
+		}
 		task := model.SummaryTask{
+			HAUID:      haUID,
+			Frequency:  item.FrequencyLabel(),
 			UID:        item.UID,
 			Title:      item.Title,
 			DueAt:      item.DueDate,
