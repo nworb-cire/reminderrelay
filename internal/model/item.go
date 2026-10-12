@@ -84,6 +84,9 @@ type Item struct {
 	// DueDate is when the task is due. Nil means no due date.
 	DueDate *time.Time
 
+	// Original HA due representation preserves date-only versus timed midnight.
+	HAOccurrenceDue string
+
 	// Priority is the normalised priority level.
 	Priority Priority
 

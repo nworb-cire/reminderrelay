@@ -67,6 +67,7 @@ func haItemToModelItem(h haTodoItem) model.Item {
 	if h.Due != "" {
 		if t, err := parseDue(h.Due); err == nil {
 			item.DueDate = &t
+			item.HAOccurrenceDue = h.Due
 		}
 	}
 

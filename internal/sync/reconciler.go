@@ -389,7 +389,12 @@ func (r *Reconciler) execute(ctx context.Context, act action, si *state.Item, re
 			}
 			if persistence, ok := r.store.(completionStore); ok {
 				due := "once"
-				if haItem.DueDate != nil {
+				if haItem.HAOccurrenceDue != "" {
+					due = haItem.HAOccurrenceDue
+					if len(due) > 10 && haItem.DueDate != nil {
+						due = haItem.DueDate.UTC().Format(time.RFC3339Nano)
+					}
+				} else if haItem.DueDate != nil {
 					if haItem.DueDate.Hour() == 0 && haItem.DueDate.Minute() == 0 && haItem.DueDate.Second() == 0 && haItem.DueDate.Nanosecond() == 0 {
 						due = haItem.DueDate.Format("2006-01-02")
 					} else {

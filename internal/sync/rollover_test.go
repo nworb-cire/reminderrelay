@@ -96,3 +96,23 @@ func TestRolloverLinkRetainsTimedOccurrence(t *testing.T) {
 		t.Fatalf("Timed occurrence lost precision: %#v", store.links)
 	}
 }
+
+func TestRolloverLinkRetainsExplicitMidnightTimestamp(t *testing.T) {
+	due := time.Date(2026, 10, 11, 0, 0, 0, 0, time.FixedZone("Denver", -6*3600))
+	master := &model.Item{UID: "master", Title: "Midnight chore", ListName: "Shopping", DueDate: &due, RecurrenceRules: []eventkit.RecurrenceRule{eventkit.Weekly(1)}}
+	store := &completionMockStore{mockStore: newMockStore()}
+	store.seed(&state.Item{RemindersUID: master.UID, HAUID: "ha-master", ListName: master.ListName, Title: master.Title, LastSyncHash: master.ProjectionHash()})
+	ha := newMockHA()
+	command := *master
+	command.UID = "ha-master"
+	command.Completed = true
+	command.HAOccurrenceDue = "2026-10-11T00:00:00-06:00"
+	ha.addItems("todo.shopping", command)
+	r := NewReconciler(&rolloverReminders{newMockReminders(master)}, ha, store, testLogger)
+	if _, err := r.Run(context.Background(), testMappings); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.links) != 1 || store.links[0].OriginDue != "2026-10-11T06:00:00Z" {
+		t.Fatalf("Midnight occurrence lost timestamp: %#v", store.links)
+	}
+}
